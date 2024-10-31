@@ -8,8 +8,8 @@
   "scripts": {
     "build": "tsc",
     "package": "ncc build --source-map --license licenses.txt",
-    "format": "prettier --write .",
-    "lint": "prettier --check ."
+    "format": "npx prettier --write .",
+    "lint": "npx prettier --check ."
   },
   "dependencies": {
     "@actions/core": "^1.10.0",

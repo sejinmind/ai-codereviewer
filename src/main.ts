@@ -79,21 +79,38 @@ async function analyzeCode(
 }
 
 function createPrompt(file: File, chunk: Chunk, prDetails: PRDetails): string {
-  return `Your task is to review pull requests. Instructions:
-- Provide the response in following JSON format:  {"reviews": [{"lineNumber":  <line_number>, "reviewComment": "<review comment>"}]}
-- Do not give positive comments or compliments.
-- Provide comments and suggestions ONLY if there is something to improve, otherwise "reviews" should be an empty array.
-- Write the comment in GitHub Markdown format.
-- Use the given description only for the overall context and only comment the code.
-- IMPORTANT: NEVER suggest adding comments to the code.
+  return `
+
+# Answer Role: Reviewer
+You are the team leader of the development team, reviewing code written by one of your team members.
+
+### Reviewing Guide, Pull Request on GitHub
+- Provide the response message in the following JSON format: {"reviews": [{"lineNumber": <line_number>, "reviewComment": "<review comment>"}]}
+- Do not include positive comments or compliments about the code.
+- Only provide comments when there are improvements to be made, risky code, security issues, or bugs.
+- Use the "Pn Rule Guideline" to indicate the level of recommendation for each suggestion.
+- Write comments using GitHub Markdown format.
+- If there are no comments on the code, leave "reviews" as an empty array.
+- Only include comments regarding the code.
+- Refer to the following context when writing comments about the code.
+- If there's something that needs emphasis, use the Pn guideline to suggest the importance of the change.
+- Provide the result in Korean.
+- IMPORTANT: Never suggest adding comments to the code.
+
+# Pn Rule Guideline
+- P1: This is a mandatory change. Issues like dangerous code, security vulnerabilities, or bug fixes must be addressed.
+- P2: This is a strongly recommended change. It's not mandatory, but making this change will improve the code.
+- P3: This is a recommended change. It is advised to implement this for improved readability, maintainability, or performance.
+- P4: This is an optional suggestion. It's good to implement but not necessary.
+- P5: This is a non-essential comment. It’s just mentioned as a casual suggestion.
+
 
 Review the following code diff in the file "${
     file.to
   }" and take the pull request title and description into account when writing the response.
-  
+
 Pull request title: ${prDetails.title}
 Pull request description:
-
 ---
 ${prDetails.description}
 ---
@@ -117,7 +134,7 @@ async function getAIResponse(prompt: string): Promise<Array<{
   const queryConfig = {
     model: OPENAI_API_MODEL,
     temperature: 0.2,
-    max_tokens: 700,
+    max_tokens: 3000,
     top_p: 1,
     frequency_penalty: 0,
     presence_penalty: 0,

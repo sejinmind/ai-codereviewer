@@ -33,7 +33,7 @@ async function getPRDetails(): Promise<PRDetails> {
     pull_number: number,
   });
   return {
-    owner: "코드리뷰하는한별이",
+    owner: repository.owner.login,
     repo: repository.name,
     pull_number: number,
     title: prResponse.data.title ?? "",

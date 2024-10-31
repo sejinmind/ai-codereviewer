@@ -9,7 +9,8 @@
     "build": "npx tsc",
     "package": "npx ncc build --source-map --license licenses.txt",
     "format": "npx prettier --write .",
-    "lint": "npx prettier --check ."
+    "lint": "npx prettier --check .",
+    "release": "make release"
   },
   "dependencies": {
     "@actions/core": "^1.10.0",

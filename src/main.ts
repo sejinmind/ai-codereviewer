@@ -161,8 +161,6 @@ async function getAIResponse(prompt: string): Promise<Array<{
 
     const res = response.choices[0].message?.content?.trim() || "{}";
     const cleanedJsonString = res.replace(/```json|```/g, "");
-    console.log("cleanedJsonString ------------------------------------------------------------");
-    console.log(cleanedJsonString)
     return JSON.parse(cleanedJsonString).reviews;
   } catch (error) {
     console.error("Error:", error);
@@ -213,6 +211,9 @@ async function createReviewCommentsInBatches(
 
   // 각 청크에 대해 1초 간격으로 순차적 요청
   for (const chunk of commentChunks) {
+    console.log("cleanedJsonString ------------------------------------------------------------");
+    console.log(chunk)
+
     await createReviewComments(owner, repo, pull_number, chunk);
     // 1초 대기
     await new Promise(resolve => setTimeout(resolve, 1000));

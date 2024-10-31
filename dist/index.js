@@ -177,8 +177,6 @@ function getAIResponse(prompt) {
                 ] }));
             const res = ((_b = (_a = response.choices[0].message) === null || _a === void 0 ? void 0 : _a.content) === null || _b === void 0 ? void 0 : _b.trim()) || "{}";
             const cleanedJsonString = res.replace(/```json|```/g, "");
-            console.log("cleanedJsonString ------------------------------------------------------------");
-            console.log(cleanedJsonString);
             return JSON.parse(cleanedJsonString).reviews;
         }
         catch (error) {
@@ -216,6 +214,8 @@ function createReviewCommentsInBatches(owner, repo, pull_number, comments) {
         const commentChunks = chunkArray(comments, 10);
         // 각 청크에 대해 1초 간격으로 순차적 요청
         for (const chunk of commentChunks) {
+            console.log("cleanedJsonString ------------------------------------------------------------");
+            console.log(chunk);
             yield createReviewComments(owner, repo, pull_number, chunk);
             // 1초 대기
             yield new Promise(resolve => setTimeout(resolve, 1000));

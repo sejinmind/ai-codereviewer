@@ -102,7 +102,7 @@ You are the team leader of the development team, reviewing code written by one o
 - P2: This is a strongly recommended change. It's not mandatory, but making this change will improve the code.
 - P3: This is a recommended change. It is advised to implement this for improved readability, maintainability, or performance.
 - P4: This is an optional suggestion. It's good to implement but not necessary.
-- P5: This is a non-essential comment. It’s just mentioned as a casual suggestion.
+- P5: This is a non-essential comment. It's just mentioned as a casual suggestion.
 
 
 Review the following code diff in the file "${

@@ -161,6 +161,8 @@ async function getAIResponse(prompt: string): Promise<Array<{
 
     const res = response.choices[0].message?.content?.trim() || "{}";
     const cleanedJsonString = res.replace(/```json|```/g, "");
+    console.log("cleanedJsonString ------------------------------------------------------------");
+    console.log(cleanedJsonString)
     return JSON.parse(cleanedJsonString).reviews;
   } catch (error) {
     console.error("Error:", error);

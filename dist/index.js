@@ -131,9 +131,9 @@ function createPrompt(file, chunk, prDetails) {
 ### Output Format
 - 다음 JSON 형식으로 응답 메시지를 제공하세요: {"reviews": [{"lineNumber": "<line_number>", "reviewComment": "<review_comment>"}]}
 - 코드에 댓글이 필요하지 않은 경우, "reviews"를 빈 배열로 두세요.
-- review_comment의 처음에는 "한별이는 이렇게 생각해요~" 를 붙여줘요. 그리고 review_comment의 끝에는 "응... 응애..", "맘마~ 코드 냄새~" 같은 말투로 마무리해 주세요.
-- 귀여운 말투를 잊지 말고 꼭 사용해 주세요.
-- 이 출력 모드는 한글 모드입니다. 한글로 출력해 주세요.
+- <review_comment>의 처음에는 "한별이는 이렇게 생각해요~" 를 붙여줘요. 그리고 <review_comment>의 끝에는 "응... 응애..", "코..드 냄새~" 같은 아기 말투로 마무리해 주세요.
+- <review_comment>의 내용은 귀엽고 사랑스러운 말투를 잊지 말고 꼭 사용해 주세요.
+- <review_comment>이 출력 모드는 한글 모드입니다. 한글로 출력해 주세요.
 
 
 ### Pull Request Details

@@ -104,9 +104,9 @@ You are the team leader of the development team, reviewing code written by one o
 ### Output Format
 - Provide the response message in the following JSON format: {"reviews": [{"lineNumber": <line_number>, "reviewComment": "<review comment>"}]}
 - If there are no comments on the code, leave "reviews" as an empty array.
-- 출력되는 글들 중에 코드를 제외한 나머지는 모두 한글로 번역해서 출력해줘.
-- 말 끝에는 ~~냥 이런식으로 끝내주면 좋을 것 같아. 귀여운 말투를 꼭 써줘
-
+- 출력되는 글들 중에 코드를 제외한 나머지는 모두 한글로 번역해줘
+- 끝에는 ~~냥 이런식으로 끝내주면 좋을 것 같아. 귀여운 말투를 꼭 써줘
+- 해당 출력모드는 한글모드야. 한글로 출력해줘.
 
 ### Pull Request Details
 Review the following code diff in the file "${
@@ -188,7 +188,36 @@ function createComment(
   });
 }
 
-async function createReviewComment(
+// 10개씩 comments를 분할하는 함수
+const chunkArray = function<T>(array: T[], size: number): T[][] {
+  const result:T[][] = [];
+  if (array.length <= size) {
+    throw new Error("Array length should be greater than size");
+  }
+  for (let i = 0; i < array.length; i += size) {
+    result.push(array.slice(i, i + size));
+  }
+  return result;
+};
+
+async function createReviewCommentsInBatches(
+  owner: string,
+  repo: string,
+  pull_number: number,
+  comments: Array<{ body: string; path: string; line: number }>
+) {
+  // comments 배열을 10개씩 나눈 청크 배열 생성
+  const commentChunks = chunkArray(comments, 10);
+
+  // 각 청크에 대해 1초 간격으로 순차적 요청
+  for (const chunk of commentChunks) {
+    await createReviewComments(owner, repo, pull_number, chunk);
+    // 1초 대기
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
+async function createReviewComments(
   owner: string,
   repo: string,
   pull_number: number,
@@ -256,7 +285,7 @@ async function main() {
 
   const comments = await analyzeCode(filteredDiff, prDetails);
   if (comments.length > 0) {
-    await createReviewComment(
+    await createReviewCommentsInBatches(
       prDetails.owner,
       prDetails.repo,
       prDetails.pull_number,

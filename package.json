@@ -6,8 +6,8 @@
   "author": "Ville Saukkonen",
   "license": "MIT",
   "scripts": {
-    "build": "tsc",
-    "package": "ncc build --source-map --license licenses.txt",
+    "build": "npx tsc",
+    "package": "npx ncc build --source-map --license licenses.txt",
     "format": "npx prettier --write .",
     "lint": "npx prettier --check ."
   },

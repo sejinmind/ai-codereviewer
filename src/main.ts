@@ -187,38 +187,6 @@ function createComment(
   });
 }
 
-// 10개씩 comments를 분할하는 함수
-const chunkArray = function<T>(array: T[], size: number): T[][] {
-  const result:T[][] = [];
-  if (array.length <= size) {
-    throw new Error("Array length should be greater than size");
-  }
-  for (let i = 0; i < array.length; i += size) {
-    result.push(array.slice(i, i + size));
-  }
-  return result;
-};
-
-async function createReviewCommentsInBatches(
-  owner: string,
-  repo: string,
-  pull_number: number,
-  comments: Array<{ body: string; path: string; line: number }>
-) {
-  // comments 배열을 10개씩 나눈 청크 배열 생성
-  const commentChunks = chunkArray(comments, 10);
-
-  // 각 청크에 대해 1초 간격으로 순차적 요청
-  for (const chunk of commentChunks) {
-    console.log("cleanedJsonString ------------------------------------------------------------");
-    console.log(chunk)
-
-    await createReviewComments(owner, repo, pull_number, chunk);
-    // 1초 대기
-    await new Promise(resolve => setTimeout(resolve, 1000));
-  }
-}
-
 async function createReviewComments(
   owner: string,
   repo: string,
@@ -231,6 +199,7 @@ async function createReviewComments(
     pull_number,
     comments,
     event: "COMMENT",
+    body: "Code review by 한별",
   });
 }
 
@@ -287,7 +256,7 @@ async function main() {
 
   const comments = await analyzeCode(filteredDiff, prDetails);
   if (comments.length > 0) {
-    await createReviewCommentsInBatches(
+    await createReviewComments(
       prDetails.owner,
       prDetails.repo,
       prDetails.pull_number,

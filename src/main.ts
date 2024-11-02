@@ -253,12 +253,16 @@ async function main() {
 
   const comments = await analyzeCode(filteredDiff, prDetails);
   if (comments.length > 0) {
-    await createReviewComments(
+    for (let i = 0; i < comments.length; i += 20) {
+      const commentSlice = comments.slice(i, i + 20);
+      // 동기적 for loop를 사용하여 20개씩 댓글을 작성합니다.
+      await createReviewComments(
       prDetails.owner,
       prDetails.repo,
       prDetails.pull_number,
-      comments
-    );
+      commentSlice
+      );
+    }
   }
 }
 

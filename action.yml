@@ -6,11 +6,18 @@ inputs:
     required: true
   OPENAI_API_KEY:
     description: "OpenAI API key for GPT."
-    required: true
+    required: false
   OPENAI_API_MODEL:
     description: "OpenAI API model."
     required: false
     default: "gpt-4"
+  ANTHROPIC_API_KEY:
+    description: "Anthropic API key for Claude."
+    required: false
+  MODEL_PROVIDER:
+    description: "Model provider."
+    required: false
+    default: "openai"
   exclude:
     description: "Glob patterns to exclude files from the diff analysis"
     required: false

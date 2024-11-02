@@ -4,15 +4,23 @@ import OpenAI from "openai";
 import { Octokit } from "@octokit/rest";
 import parseDiff, { Chunk, File } from "parse-diff";
 import minimatch from "minimatch";
+import Anthropic from "@anthropic-ai/sdk";
+import { TextBlock } from "@anthropic-ai/sdk/resources";
 
 const GITHUB_TOKEN: string = core.getInput("GITHUB_TOKEN");
 const OPENAI_API_KEY: string = core.getInput("OPENAI_API_KEY");
 const OPENAI_API_MODEL: string = core.getInput("OPENAI_API_MODEL");
+const ANTHROPIC_API_KEY: string = core.getInput("ANTHROPIC_API_KEY");
+const MODEL_PROVIDER: string = core.getInput("MODEL_PROVIDER") || "openai"; // 기본값은 openai
 
 const octokit = new Octokit({ auth: GITHUB_TOKEN });
 
 const openai = new OpenAI({
   apiKey: OPENAI_API_KEY,
+});
+
+const anthropic = new Anthropic({
+  apiKey: ANTHROPIC_API_KEY,
 });
 
 interface PRDetails {
@@ -86,20 +94,10 @@ function createPrompt(file: File, chunk: Chunk, prDetails: PRDetails): string {
 
 ### Requirements, Reviewing Guide, Pull Request on GitHub
 - 코드에 대한 긍정적인 댓글이나 칭찬을 포함하지 마세요.
-- 개선할 부분, 코드 냄새, 위험한 코드, 보안 문제 또는 버그가 있는 경우에만 댓글을 작성하세요.
-- 각 제안 사항의 중요도를 "Pn Rule Guideline"에 따라 표시하세요.
 - GitHub Markdown 형식을 사용하여 댓글을 작성하세요.
 - 코드와 관련된 댓글만 포함하세요.
-- 코드에 대한 의견을 작성할 때 다음의 맥락을 참조하세요.
-- 강조해야 할 사항이 있는 경우, Pn 가이드를 사용하여 변경의 중요성을 제안하세요.
 - **중요**: 코드에 주석 추가를 절대 제안하지 마세요.
-
-### Pn Rule Guideline
-- **P1**: 반드시 변경해야 하는 사항입니다. 위험한 코드, 보안 취약점, 버그 수정 등이 포함됩니다.
-- **P2**: 강력히 권장되는 사항입니다. 필수는 아니지만 이 변경을 통해 코드가 개선될 수 있습니다.
-- **P3**: 권장되는 사항입니다. 코드의 가독성, 유지보수성 또는 성능을 위해 구현하는 것이 좋습니다.
-- **P4**: 선택적인 제안입니다. 구현하면 좋지만 필수는 아닙니다.
-- **P5**: 비필수적인 제안입니다. 캐주얼한 의견으로, 참고만 해도 좋습니다.
+- 리뷰잉의 근거를 명확하게 작성하세요. 공식홈페이지나 가이드 웹사이트가 있다면 첨부해주세요,
 
 ### Output Format
 - 다음 JSON 형식으로 응답 메시지를 제공하세요: {"reviews": [{"lineNumber": "<line_number>", "reviewComment": "<review_comment>"}]}
@@ -132,33 +130,55 @@ async function getAIResponse(prompt: string): Promise<Array<{
   lineNumber: string;
   reviewComment: string;
 }> | null> {
-  const queryConfig = {
-    model: OPENAI_API_MODEL,
-    temperature: 0.2,
-    max_tokens: 3000,
-    top_p: 1,
-    frequency_penalty: 0,
-    presence_penalty: 0,
-  };
-
   try {
-    const response = await openai.chat.completions.create({
-      ...queryConfig,
-      // return JSON if the model supports it:
-      ...(OPENAI_API_MODEL === "gpt-4-1106-preview"
-        ? { response_format: { type: "json_object" } }
-        : {}),
-      messages: [
-        {
-          role: "system",
-          content: prompt,
-        },
-      ],
-    });
+    if (MODEL_PROVIDER === "anthropic") {
+      const response = await anthropic.messages.create({
+        model: "claude-3-sonnet-20240229",
+        max_tokens: 3000,
+        temperature: 0.2,
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+      });
+      if (response.content.length === 0) {
+        return [];
+      }
+      const textBlock = response.content[0] as TextBlock;
+      const res = textBlock.text.trim() || '{}';
+      const cleanedJsonString = res.replace(/```json|```/g, "");
+      return JSON.parse(cleanedJsonString).reviews;
+    } else {
+      const queryConfig = {
+        model: OPENAI_API_MODEL,
+        temperature: 0.2,
+        max_tokens: 3000,
+        top_p: 1,
+        frequency_penalty: 0,
+        presence_penalty: 0,
+      };
 
-    const res = response.choices[0].message?.content?.trim() || "{}";
-    const cleanedJsonString = res.replace(/```json|```/g, "");
-    return JSON.parse(cleanedJsonString).reviews;
+      const response = await openai.chat.completions.create({
+        ...queryConfig,
+        ...(OPENAI_API_MODEL === "gpt-4-1106-preview"
+          ? { response_format: { type: "json_object" } }
+          : {}),
+        messages: [
+          {
+            role: "system",
+            content: prompt,
+          },
+        ],
+      });
+      if (response.choices.length === 0) {
+        return [];
+      }
+      const res = response.choices[0].message?.content?.trim() || "{}";
+      const cleanedJsonString = res.replace(/```json|```/g, "");
+      return JSON.parse(cleanedJsonString).reviews;
+    }
   } catch (error) {
     console.error("Error:", error);
     return null;
@@ -257,10 +277,10 @@ async function main() {
       const commentSlice = comments.slice(i, i + 20);
       // 동기적 for loop를 사용하여 20개씩 댓글을 작성합니다.
       await createReviewComments(
-      prDetails.owner,
-      prDetails.repo,
-      prDetails.pull_number,
-      commentSlice
+        prDetails.owner,
+        prDetails.repo,
+        prDetails.pull_number,
+        commentSlice
       );
     }
   }

@@ -7,11 +7,9 @@ inputs:
   MODEL_PROVIDER:
     description: "Model provider."
     required: true
-    default: "openai"
   AI_MODEL:
     description: "AI model name"
     required: true
-    default: "gpt-3.5-turbo"
   OPENAI_API_KEY:
     description: "OpenAI API key for GPT."
     required: false

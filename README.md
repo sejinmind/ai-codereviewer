@@ -45,15 +45,15 @@ jobs:
         uses: drakejin/ai-codereviewer@main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          AI_MODEL: "gpt-4-1106-preview"  # OpenAI 모델 지정
-          # OpenAI 설정
+          AI_MODEL: "gpt-4-1106-preview"  # 필수
+          MODEL_PROVIDER: "openai"  # "openai" 또는 "anthropic"
+          # OpenAI 설정 (선택사항)
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Anthropic 설정 (선택사항)
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          MODEL_PROVIDER: "openai"  # "openai" 또는 "anthropic"
           # 토큰 제한 설정
           MAX_OUTPUT_TOKENS: 4096
-          MAX_CONTEXT_TOKENS: 16384
+          MAX_CONTEXT_TOKENS: 128000
           # 파일 제외 패턴
           IGNORE_PATTERNS: "yarn.lock,dist/**,**/*.json,**/*.md"
 ```
@@ -63,8 +63,8 @@ jobs:
 | 입력 변수 | 필수 여부 | 기본값 | 설명 |
 |------------|----------|---------|-------------|
 | GITHUB_TOKEN | 필수 | - | GitHub API 접근용 토큰 |
-| MODEL_PROVIDER | 선택 | openai | 사용할 AI 제공자 ("openai" 또는 "anthropic") |
-| AI_MODEL | 선택 | gpt-4 | 사용할 AI 모델 |
+| MODEL_PROVIDER | 필수 | openai | 사용할 AI 제공자 ("openai" 또는 "anthropic") |
+| AI_MODEL | 필수 | gpt-4 | 사용할 AI 모델 |
 | OPENAI_API_KEY | 선택 | - | OpenAI API 키 |
 | ANTHROPIC_API_KEY | 선택 | - | Anthropic API 키 |
 | MAX_OUTPUT_TOKENS | 선택 | 4096 | AI 응답의 최대 토큰 수 |

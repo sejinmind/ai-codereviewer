@@ -53,7 +53,7 @@ jobs:
           MAX_OUTPUT_TOKENS: 4096 # 선택사항: AI 응답의 최대 토큰 수
           MAX_CONTEXT_TOKENS: 16384 # 선택사항: 입력 컨텍스트의 최대 토큰 수
           # 파일 제외 패턴
-          exclude: "**/*.json, **/*.md" # 선택사항: 콤마로 구분된 제외 패턴
+          exclude: "**/*.json, **/*.md" # 선택사항: 콤마로 구분된 제외 패턴, npm minimatch module 사용
 ```
 
 4. `your-username`을 AI Code Reviewer 저장소가 위치한 GitHub 사용자명이나 조직명으로 변경하세요.

@@ -7,7 +7,7 @@ inputs:
   OPENAI_API_KEY:
     description: "OpenAI API key for GPT."
     required: false
-  OPENAI_API_MODEL:
+  AI_MODEL:
     description: "OpenAI API model."
     required: false
     default: "gpt-4"
@@ -18,10 +18,14 @@ inputs:
     description: "Model provider."
     required: false
     default: "openai"
-  MAX_TOKENS:
+  MAX_OUTPUT_TOKENS:
     description: "Maximum tokens for the code review."
     required: false
     default: 4096
+  MAX_CONTEXT_TOKENS:
+    description: "Maximum tokens for the context."
+    required: false
+    default: 16384
   PROMPT_ADDITIONAL_REQUIREMENTS:
     description: "Additional requirements for the code review."
     required: false

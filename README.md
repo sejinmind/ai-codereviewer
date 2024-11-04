@@ -1,25 +1,27 @@
 # AI Code Reviewer
 
-AI Code Reviewer is a GitHub Action that leverages OpenAI's GPT-4 API to provide intelligent feedback and suggestions on
-your pull requests. This powerful tool helps improve code quality and saves developers time by automating the code
-review process.
+AI Code Reviewer는 OpenAI의 GPT-4 API 또는 Anthropic의 Claude API를 활용하여 풀 리퀘스트에 대한 지능형 피드백과 제안을 제공하는 GitHub Action입니다.
 
 ## Features
 
-- Reviews pull requests using OpenAI's GPT-4 API.
-- Provides intelligent comments and suggestions for improving your code.
-- Filters out files that match specified exclude patterns.
-- Easy to set up and integrate into your GitHub workflow.
+- OpenAI GPT-4 또는 Anthropic Claude를 사용한 코드 리뷰
+- 코드 개선을 위한 지능형 코멘트 및 제안
+- 지정된 패턴의 파일 제외 기능
+- 간편한 설정 및 GitHub 워크플로우 통합
 
 ## Setup
 
-1. To use this GitHub Action, you need an OpenAI API key. If you don't have one, sign up for an API key
-   at [OpenAI](https://beta.openai.com/signup).
+1. API 키 준비:
+   - OpenAI 사용 시: [OpenAI](https://beta.openai.com/signup)에서 API 키 발급
+   - Anthropic 사용 시: [Anthropic](https://www.anthropic.com/)에서 API 키 발급
 
-2. Add the OpenAI API key as a GitHub Secret in your repository with the name `OPENAI_API_KEY`. You can find more
-   information about GitHub Secrets [here](https://docs.github.com/en/actions/reference/encrypted-secrets).
+2. GitHub Secrets 설정:
+   - OpenAI 사용 시: `OPENAI_API_KEY`
+   - Anthropic 사용 시: `ANTHROPIC_API_KEY`
 
-3. Create a `.github/workflows/main.yml` file in your repository and add the following content:
+   [GitHub Secrets 설정 방법](https://docs.github.com/en/actions/reference/encrypted-secrets)
+
+3. `.github/workflows/main.yml` 파일 생성:
 
 ```yaml
 name: AI Code Reviewer
@@ -38,33 +40,47 @@ jobs:
         uses: actions/checkout@v3
 
       - name: AI Code Reviewer
-        uses: your-username/ai-code-reviewer@main
+        uses: your-username/ai-codereviewer@main
         with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # The GITHUB_TOKEN is there by default so you just need to keep it like it is and not necessarily need to add it as secret as it will throw an error. [More Details](https://docs.github.com/en/actions/security-guides/automatic-token-authentication#about-the-github_token-secret)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # OpenAI 설정
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_API_MODEL: "gpt-4" # Optional: defaults to "gpt-4"
-          exclude: "**/*.json, **/*.md" # Optional: exclude patterns separated by commas
+          AI_MODEL: "gpt-4" # 선택사항: 기본값 "gpt-4"
+          # Anthropic 설정
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL_PROVIDER: "openai" # 선택사항: "openai" 또는 "anthropic", 기본값 "openai"
+          # 토큰 제한 설정
+          MAX_OUTPUT_TOKENS: 4096 # 선택사항: AI 응답의 최대 토큰 수
+          MAX_CONTEXT_TOKENS: 16384 # 선택사항: 입력 컨텍스트의 최대 토큰 수
+          # 파일 제외 패턴
+          exclude: "**/*.json, **/*.md" # 선택사항: 콤마로 구분된 제외 패턴
 ```
 
-4. Replace `your-username` with your GitHub username or organization name where the AI Code Reviewer repository is
-   located.
+4. `your-username`을 AI Code Reviewer 저장소가 위치한 GitHub 사용자명이나 조직명으로 변경하세요.
 
-5. Customize the `exclude` input if you want to ignore certain file patterns from being reviewed.
+## Configuration
 
-6. Commit the changes to your repository, and AI Code Reviewer will start working on your future pull requests.
+| 입력 변수 | 필수 여부 | 기본값 | 설명 |
+|------------|----------|---------|-------------|
+| GITHUB_TOKEN | 필수 | - | GitHub API 접근용 토큰 |
+| OPENAI_API_KEY | 선택 | - | OpenAI API 키 |
+| AI_MODEL | 선택 | gpt-4 | 사용할 OpenAI 모델 |
+| ANTHROPIC_API_KEY | 선택 | - | Anthropic API 키 |
+| MODEL_PROVIDER | 선택 | openai | 사용할 AI 제공자 ("openai" 또는 "anthropic") |
+| MAX_OUTPUT_TOKENS | 선택 | 4096 | AI 응답의 최대 토큰 수 |
+| MAX_CONTEXT_TOKENS | 선택 | 16384 | 입력 컨텍스트의 최대 토큰 수 |
+| exclude | 선택 | - | 리뷰에서 제외할 파일 패턴 |
 
 ## How It Works
 
-The AI Code Reviewer GitHub Action retrieves the pull request diff, filters out excluded files, and sends code chunks to
-the OpenAI API. It then generates review comments based on the AI's response and adds them to the pull request.
+AI Code Reviewer는 PR의 diff를 가져와 제외된 파일을 필터링한 후, 코드 청크를 선택된 AI 제공자(OpenAI 또는 Anthropic)에게 전송합니다. AI의 응답을 기반으로 리뷰 코멘트를 생성하여 PR에 추가합니다.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit issues or pull requests to improve the AI Code Reviewer GitHub
-Action.
+기여는 언제나 환영합니다! 이슈나 PR을 통해 AI Code Reviewer를 개선하는데 참여해주세요.
 
-Let the maintainer generate the final package (`yarn build` & `yarn package`).
+패키지 생성은 메인테이너가 수행합니다 (`yarn build` & `yarn package`).
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more information.
+이 프로젝트는 MIT 라이선스를 따릅니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.

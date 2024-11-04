@@ -7,10 +7,11 @@ import minimatch from "minimatch";
 import Anthropic from "@anthropic-ai/sdk";
 import { TextBlock } from "@anthropic-ai/sdk/resources";
 
-const MAX_TOKENS: number = Number(core.getInput("MAX_TOKENS")) || 4096;
+const MAX_OUTPUT_TOKENS: number = Number(core.getInput("MAX_OUTPUT_TOKENS")) || 4096;
+const MAX_CONTEXT_TOKENS: number = Number(core.getInput("MAX_CONTEXT_TOKENS")) || 16384;
 const GITHUB_TOKEN: string = core.getInput("GITHUB_TOKEN");
 const OPENAI_API_KEY: string = core.getInput("OPENAI_API_KEY");
-const OPENAI_API_MODEL: string = core.getInput("OPENAI_API_MODEL");
+const AI_MODEL: string = core.getInput("AI_MODEL");
 const ANTHROPIC_API_KEY: string = core.getInput("ANTHROPIC_API_KEY");
 const MODEL_PROVIDER: string = core.getInput("MODEL_PROVIDER") || "openai"; // 기본값은 openai
 
@@ -169,16 +170,17 @@ async function getAIResponse(file: File, prompt: string): Promise<Array<{
 }> | null> {
   try {
     const estimatedTokens = estimateTokenCount(prompt);
-    console.log(`Estimated token count: ${estimatedTokens}`);
+    console.log(`Estimated input token count: ${estimatedTokens}`);
 
-    if (estimatedTokens > MAX_TOKENS) {
-      console.warn(`${file.to}: is estimated tokens (${estimatedTokens}) exceeds MAX_TOKENS (${MAX_TOKENS})`);
+    if (estimatedTokens > MAX_CONTEXT_TOKENS) {
+      console.warn(`${file.to}: Input tokens (${estimatedTokens}) is too large`);
       return [];
     }
+
     if (MODEL_PROVIDER === "anthropic") {
       const response = await anthropic.messages.create({
         model: "claude-3-sonnet-20240229",
-        max_tokens: MAX_TOKENS,
+        max_tokens: MAX_OUTPUT_TOKENS,
         temperature: 0.2,
         messages: [
           {
@@ -196,9 +198,9 @@ async function getAIResponse(file: File, prompt: string): Promise<Array<{
       return JSON.parse(cleanedJsonString).reviews;
     } else {
       const queryConfig = {
-        model: OPENAI_API_MODEL,
+        model: AI_MODEL,
         temperature: 0.2,
-        max_tokens: MAX_TOKENS,
+        max_tokens: MAX_OUTPUT_TOKENS,
         top_p: 1,
         frequency_penalty: 0,
         presence_penalty: 0,
@@ -206,7 +208,7 @@ async function getAIResponse(file: File, prompt: string): Promise<Array<{
 
       const response = await openai.chat.completions.create({
         ...queryConfig,
-        ...(OPENAI_API_MODEL === "gpt-4-1106-preview"
+        ...(AI_MODEL === "gpt-4-1106-preview"
           ? { response_format: { type: "json_object" } }
           : {}),
         messages: [

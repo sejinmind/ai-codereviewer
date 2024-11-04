@@ -119,11 +119,15 @@ function createPrompt(file: File, prDetails: PRDetails): string {
 
 ### Requirements, Reviewing Guide, Pull Request on GitHub
 - 매 코드 리뷰잉은, Pull Request의 제목과 설명을 고려하세요.
-- 코드에 대한 긍정적인 댓글이나 칭찬을 포함하지 마세요.
+- 극심한 코드스멜, 보안의 위험, 버그 발생가능성, 비효율적인 코드 만을 포함해주세요.
 - GitHub Markdown 형식을 사용하여 댓글을 작성하세요.
 - 코드와 관련된 댓글만 포함하세요.
 - 리뷰잉의 근거를 명확하게 작성하세요.
-- **중요**: 코드에 주석 추가를 절대 제안하지 마세요.
+
+### Don't include
+- 검토 및 고려사항은 같은 모호한것들은 절대 포함하지 마세요.
+- 코드에 대한 긍정적인 댓글이나 칭찬을 포함하지 마세요.
+- 코드에 주석 추가를 절대 제안하지 마세요.
 
 ### Additional Requirements
 

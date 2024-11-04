@@ -282,11 +282,11 @@ function main() {
         });
         const comments = yield analyzeCode(filteredDiff, prDetails);
         if (comments.length > 0) {
-            for (let i = 0; i < comments.length; i += 20) {
-                const commentSlice = comments.slice(i, i + 20);
-                // 동기적 for loop를 사용하여 20개씩 댓글을 작성합니다.
-                yield createReviewComments(prDetails.owner, prDetails.repo, prDetails.pull_number, commentSlice);
-            }
+            // for (let i = 0; i < comments.length; i += 20) {
+            //   const commentSlice = comments.slice(i, i + 20);
+            //   // 동기적 for loop를 사용하여 20개씩 댓글을 작성합니다.
+            // }
+            yield createReviewComments(prDetails.owner, prDetails.repo, prDetails.pull_number, comments);
         }
     });
 }

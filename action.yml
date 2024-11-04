@@ -18,6 +18,10 @@ inputs:
     description: "Model provider."
     required: false
     default: "openai"
+  MAX_TOKENS:
+    description: "Maximum tokens for the code review."
+    required: false
+    default: 4096
   PROMPT_ADDITIONAL_REQUIREMENTS:
     description: "Additional requirements for the code review."
     required: false

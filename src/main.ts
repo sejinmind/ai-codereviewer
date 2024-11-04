@@ -7,6 +7,7 @@ import minimatch from "minimatch";
 import Anthropic from "@anthropic-ai/sdk";
 import { TextBlock } from "@anthropic-ai/sdk/resources";
 
+const MAX_TOKENS: number = Number(core.getInput("MAX_TOKENS")) || 4096;
 const GITHUB_TOKEN: string = core.getInput("GITHUB_TOKEN");
 const OPENAI_API_KEY: string = core.getInput("OPENAI_API_KEY");
 const OPENAI_API_MODEL: string = core.getInput("OPENAI_API_MODEL");
@@ -73,7 +74,8 @@ async function analyzeCode(
   for (const file of parsedDiff) {
     if (file.to === "/dev/null") continue; // Ignore deleted files
       const prompt = createPrompt(file, prDetails);
-      const aiResponse = await getAIResponse(prompt);
+      console.log(prompt);
+      const aiResponse = await getAIResponse(file, prompt);
       if (aiResponse) {
         const newComments = createComment(file, aiResponse);
         if (newComments) {
@@ -149,17 +151,34 @@ ${process.env.ADDITIONAL_REQUIREMENTS}
 - 해당 코드에 리뷰가 없다면 "reviews"를 빈 배열로 두세요.
 - <review_comment> 의 내용은 한글로 출력해주세요.
 `;
+
 }
 
-async function getAIResponse(prompt: string): Promise<Array<{
+function estimateTokenCount(text: string): number {
+  // 대략적인 추정: 영어 기준 1토큰 ≈ 4글자
+  // 한글은 1글자당 약 2-3토큰 소비
+  const englishCharCount = text.replace(/[^a-zA-Z0-9\s]/g, '').length;
+  const koreanCharCount = text.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣]/g, '').length;
+
+  return Math.ceil(englishCharCount / 4) + (koreanCharCount * 2);
+}
+
+async function getAIResponse(file: File, prompt: string): Promise<Array<{
   lineNumber: string;
   reviewComment: string;
 }> | null> {
   try {
+    const estimatedTokens = estimateTokenCount(prompt);
+    console.log(`Estimated token count: ${estimatedTokens}`);
+
+    if (estimatedTokens > MAX_TOKENS) {
+      console.warn(`${file.to}: is estimated tokens (${estimatedTokens}) exceeds MAX_TOKENS (${MAX_TOKENS})`);
+      return [];
+    }
     if (MODEL_PROVIDER === "anthropic") {
       const response = await anthropic.messages.create({
         model: "claude-3-sonnet-20240229",
-        max_tokens: 3000,
+        max_tokens: MAX_TOKENS,
         temperature: 0.2,
         messages: [
           {
@@ -179,7 +198,7 @@ async function getAIResponse(prompt: string): Promise<Array<{
       const queryConfig = {
         model: OPENAI_API_MODEL,
         temperature: 0.2,
-        max_tokens: 3000,
+        max_tokens: MAX_TOKENS,
         top_p: 1,
         frequency_penalty: 0,
         presence_penalty: 0,

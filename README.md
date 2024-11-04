@@ -21,17 +21,19 @@ AI Code Reviewer는 OpenAI의 GPT-4 API 또는 Anthropic의 Claude API를 활용
 
    [GitHub Secrets 설정 방법](https://docs.github.com/en/actions/reference/encrypted-secrets)
 
-3. `.github/workflows/main.yml` 파일 생성:
+3. `.github/workflows/code_review.yml` 파일 생성:
 
 ```yaml
-name: AI Code Reviewer
+name: AI Code Review
 
 on:
   pull_request:
     types:
       - opened
       - synchronize
+
 permissions: write-all
+
 jobs:
   review:
     runs-on: ubuntu-latest
@@ -40,36 +42,34 @@ jobs:
         uses: actions/checkout@v3
 
       - name: AI Code Reviewer
-        uses: your-username/ai-codereviewer@main
+        uses: drakejin/ai-codereviewer@main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AI_MODEL: "gpt-4-1106-preview"  # OpenAI 모델 지정
           # OpenAI 설정
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          AI_MODEL: "gpt-4" # 선택사항: 기본값 "gpt-4"
-          # Anthropic 설정
+          # Anthropic 설정 (선택사항)
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          MODEL_PROVIDER: "openai" # 선택사항: "openai" 또는 "anthropic", 기본값 "openai"
+          MODEL_PROVIDER: "openai"  # "openai" 또는 "anthropic"
           # 토큰 제한 설정
-          MAX_OUTPUT_TOKENS: 4096 # 선택사항: AI 응답의 최대 토큰 수
-          MAX_CONTEXT_TOKENS: 16384 # 선택사항: 입력 컨텍스트의 최대 토큰 수
+          MAX_OUTPUT_TOKENS: 4096
+          MAX_CONTEXT_TOKENS: 16384
           # 파일 제외 패턴
-          exclude: "**/*.json, **/*.md" # 선택사항: 콤마로 구분된 제외 패턴, npm minimatch module 사용
+          IGNORE_PATTERNS: "yarn.lock,dist/**,**/*.json,**/*.md"
 ```
-
-4. `your-username`을 AI Code Reviewer 저장소가 위치한 GitHub 사용자명이나 조직명으로 변경하세요.
 
 ## Configuration
 
 | 입력 변수 | 필수 여부 | 기본값 | 설명 |
 |------------|----------|---------|-------------|
 | GITHUB_TOKEN | 필수 | - | GitHub API 접근용 토큰 |
-| OPENAI_API_KEY | 선택 | - | OpenAI API 키 |
-| AI_MODEL | 선택 | gpt-4 | 사용할 OpenAI 모델 |
-| ANTHROPIC_API_KEY | 선택 | - | Anthropic API 키 |
 | MODEL_PROVIDER | 선택 | openai | 사용할 AI 제공자 ("openai" 또는 "anthropic") |
+| AI_MODEL | 선택 | gpt-4 | 사용할 AI 모델 |
+| OPENAI_API_KEY | 선택 | - | OpenAI API 키 |
+| ANTHROPIC_API_KEY | 선택 | - | Anthropic API 키 |
 | MAX_OUTPUT_TOKENS | 선택 | 4096 | AI 응답의 최대 토큰 수 |
 | MAX_CONTEXT_TOKENS | 선택 | 16384 | 입력 컨텍스트의 최대 토큰 수 |
-| exclude | 선택 | - | 리뷰에서 제외할 파일 패턴 |
+| IGNORE_PATTERNS | 선택 | - | 리뷰에서 제외할 파일 패턴 (npm minimatch 모듈 사용) |
 
 ## How It Works
 

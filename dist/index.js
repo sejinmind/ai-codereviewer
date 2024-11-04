@@ -56,6 +56,7 @@ const OPENAI_API_KEY = core.getInput("OPENAI_API_KEY");
 const AI_MODEL = core.getInput("AI_MODEL");
 const ANTHROPIC_API_KEY = core.getInput("ANTHROPIC_API_KEY");
 const MODEL_PROVIDER = core.getInput("MODEL_PROVIDER") || "openai"; // 기본값은 openai
+const IGNORE_PATTERNS = core.getInput("IGNORE_PATTERNS") || "";
 const octokit = new rest_1.Octokit({ auth: GITHUB_TOKEN });
 const openai = new openai_1.default({
     apiKey: OPENAI_API_KEY,
@@ -197,7 +198,7 @@ function getAIResponse(file, prompt) {
             }
             if (MODEL_PROVIDER === "anthropic") {
                 const response = yield anthropic.messages.create({
-                    model: "claude-3-sonnet-20240229",
+                    model: AI_MODEL,
                     max_tokens: MAX_OUTPUT_TOKENS,
                     temperature: 0.2,
                     messages: [
@@ -314,8 +315,7 @@ function main() {
             return;
         }
         const parsedDiff = (0, parse_diff_1.default)(diff);
-        const excludePatterns = core
-            .getInput("exclude")
+        const excludePatterns = IGNORE_PATTERNS
             .split(",")
             .map((s) => s.trim());
         const filteredDiff = parsedDiff.filter((file) => {

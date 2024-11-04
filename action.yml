@@ -4,20 +4,20 @@ inputs:
   GITHUB_TOKEN:
     description: "GitHub token to interact with the repository."
     required: true
+  MODEL_PROVIDER:
+    description: "Model provider."
+    required: true
+    default: "openai"
+  AI_MODEL:
+    description: "AI model name"
+    required: true
+    default: "gpt-3.5-turbo"
   OPENAI_API_KEY:
     description: "OpenAI API key for GPT."
     required: false
-  AI_MODEL:
-    description: "OpenAI API model."
-    required: false
-    default: "gpt-4"
   ANTHROPIC_API_KEY:
     description: "Anthropic API key for Claude."
     required: false
-  MODEL_PROVIDER:
-    description: "Model provider."
-    required: false
-    default: "openai"
   MAX_OUTPUT_TOKENS:
     description: "Maximum tokens for the code review."
     required: false
@@ -29,7 +29,7 @@ inputs:
   PROMPT_ADDITIONAL_REQUIREMENTS:
     description: "Additional requirements for the code review."
     required: false
-  exclude:
+  IGNORE_PATTERNS:
     description: "Glob patterns to exclude files from the diff analysis"
     required: false
     default: ""

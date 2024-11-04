@@ -1,20 +1,32 @@
-name: Code Review with OpenAI
+name: AI Code Review
+
 on:
   pull_request:
     types:
       - opened
       - synchronize
+
 permissions: write-all
+
 jobs:
-  code_review:
+  review:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout Repo
         uses: actions/checkout@v3
-      - name: Code Review
-        uses: freeedcom/ai-codereviewer@main
+
+      - name: AI Code Reviewer
+        uses: drakejin/ai-codereviewer@main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # OpenAI 설정
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          AI_MODEL: "gpt-4-1106-preview"
-          exclude: "yarn.lock,dist/**"
+          AI_MODEL: "gpt-4-1106-preview"  # OpenAI 모델 지정
+          # Anthropic 설정 (선택사항)
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL_PROVIDER: "openai"  # "openai" 또는 "anthropic"
+          # 토큰 제한 설정
+          MAX_OUTPUT_TOKENS: 4096
+          MAX_CONTEXT_TOKENS: 16384
+          # 파일 제외 패턴
+          IGNORE_PATTERNS: "yarn.lock,dist/**,**/*.json,**/*.md"

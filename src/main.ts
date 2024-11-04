@@ -192,7 +192,7 @@ function createComment(
     lineNumber: string;
     reviewComment: string;
   }>
-): Array<{ body: string; path: string; line: number }> {
+): Array<{ body: string; path: string; line: number; start_line?: number }> {
   return aiResponses.flatMap((aiResponse) => {
     if (!file.to) {
       return [];
@@ -201,17 +201,20 @@ function createComment(
       return [];
     }
 
-    let lineNumber = 0;
-    if (aiResponse.lineNumber.split("-").length > 1) {
-      const [start, end] = aiResponse.lineNumber.split("-").map(Number);
-      lineNumber = end
-    } else {
-      lineNumber = Number(aiResponse.lineNumber);
+    if (aiResponse.lineNumber.includes('-')) {
+      const [start, end] = aiResponse.lineNumber.split('-').map(Number);
+      return {
+        body: aiResponse.reviewComment,
+        path: file.to,
+        start_line: start,
+        line: end,
+      };
     }
+
     return {
       body: aiResponse.reviewComment,
       path: file.to,
-      line: lineNumber,
+      line: Number(aiResponse.lineNumber),
     };
   });
 }
@@ -220,14 +223,20 @@ async function createReviewComments(
   owner: string,
   repo: string,
   pull_number: number,
-  comments: Array<{ body: string; path: string; line: number }>
+  comments: Array<{ body: string; path: string; line: number; start_line?: number }>
 ): Promise<void> {
+  const commentsWithSide = comments.map(comment => ({
+    ...comment,
+    side: 'RIGHT',
+    start_side: comment.start_line ? 'RIGHT' : undefined,
+  }));
+
   await octokit.pulls.createReview({
     owner,
     repo,
     pull_number,
-    comments,
-    event: "COMMENT",
+    comments: commentsWithSide,
+    event: 'COMMENT',
   });
 }
 

@@ -213,29 +213,31 @@ function createComment(file, chunk, aiResponses) {
         if (!aiResponse.lineNumber || !aiResponse.reviewComment) {
             return [];
         }
-        let lineNumber = 0;
-        if (aiResponse.lineNumber.split("-").length > 1) {
-            const [start, end] = aiResponse.lineNumber.split("-").map(Number);
-            lineNumber = end;
-        }
-        else {
-            lineNumber = Number(aiResponse.lineNumber);
+        if (aiResponse.lineNumber.includes('-')) {
+            const [start, end] = aiResponse.lineNumber.split('-').map(Number);
+            return {
+                body: aiResponse.reviewComment,
+                path: file.to,
+                start_line: start,
+                line: end,
+            };
         }
         return {
             body: aiResponse.reviewComment,
             path: file.to,
-            line: lineNumber,
+            line: Number(aiResponse.lineNumber),
         };
     });
 }
 function createReviewComments(owner, repo, pull_number, comments) {
     return __awaiter(this, void 0, void 0, function* () {
+        const commentsWithSide = comments.map(comment => (Object.assign(Object.assign({}, comment), { side: 'RIGHT', start_side: comment.start_line ? 'RIGHT' : undefined })));
         yield octokit.pulls.createReview({
             owner,
             repo,
             pull_number,
-            comments,
-            event: "COMMENT",
+            comments: commentsWithSide,
+            event: 'COMMENT',
         });
     });
 }

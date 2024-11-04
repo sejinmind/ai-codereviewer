@@ -97,57 +97,74 @@ function analyzeCode(parsedDiff, prDetails) {
         for (const file of parsedDiff) {
             if (file.to === "/dev/null")
                 continue; // Ignore deleted files
-            for (const chunk of file.chunks) {
-                const prompt = createPrompt(file, chunk, prDetails);
-                const aiResponse = yield getAIResponse(prompt);
-                if (aiResponse) {
-                    const newComments = createComment(file, chunk, aiResponse);
-                    if (newComments) {
-                        comments.push(...newComments);
-                    }
+            const prompt = createPrompt(file, prDetails);
+            const aiResponse = yield getAIResponse(prompt);
+            if (aiResponse) {
+                const newComments = createComment(file, aiResponse);
+                if (newComments) {
+                    comments.push(...newComments);
                 }
             }
         }
         return comments;
     });
 }
-function createPrompt(file, chunk, prDetails) {
+function createPrompt(file, prDetails) {
     return `
 
-  # Answer Role: Reviewer
+# Pull Request Details
+### Pull Request Info
+- title
+  > ${prDetails.title}
+- description
+  > ${prDetails.description}
+
+### Code for review
+- file
+  > ${file.to}
+
+- changes
+  \`\`\`
+   ${file.chunks.map((chunk) => chunk.content).join("\n")}
+  \`\`\`
+
+- diff
+    ${file.chunks.map((chunk) => {
+        return chunk.changes.map((change) => {
+            // @ts-expect-error - ln and ln2 exists where needed
+            return `${change.ln ? change.ln : change.ln2} ${change.content}`;
+        }).join("\n");
+    }).join("\n")}
+
+
+# Reviewing Guide
+
+### Answer Role: Reviewer
 당신은 개발팀을 이루는 팀장입니다. 팀원이 작성한 코드를 검토하는 역할을 수행합니다.
 
 ### Requirements, Reviewing Guide, Pull Request on GitHub
 - 코드에 대한 긍정적인 댓글이나 칭찬을 포함하지 마세요.
 - GitHub Markdown 형식을 사용하여 댓글을 작성하세요.
 - 코드와 관련된 댓글만 포함하세요.
+- 리뷰잉의 근거를 명확하게 작성하세요.
 - **중요**: 코드에 주석 추가를 절대 제안하지 마세요.
-- 리뷰잉의 근거를 명확하게 작성하세요. 공식홈페이지나 가이드 웹사이트가 있다면 첨부해주세요,
+
+### Additional Requirements
+
+${process.env.ADDITIONAL_REQUIREMENTS}
 
 ### Output Format
 - 다음 JSON 형식으로 응답 메시지를 제공하세요: {"reviews": [{"lineNumber": "<line_number>", "reviewComment": "<review_comment>"}]}
-- 코드에 댓글이 필요하지 않은 경우, "reviews"를 빈 배열로 두세요.
-- <review_comment>이 출력 모드는 한글 모드입니다. 한글로 출력해 주세요.
-
-
-### Pull Request Details
-파일 "${file.to}"에서 다음 코드 차이를 검토하고, 응답을 작성할 때 pull request의 제목과 설명을 고려하세요.
-
-Pull request title: ${prDetails.title}
-Pull request description:
----
-${prDetails.description}
----
-
-Git diff to review:
-
-\`\`\`diff
-${chunk.content}
-${chunk.changes
-        // @ts-expect-error - ln and ln2 exists where needed
-        .map((c) => `${c.ln ? c.ln : c.ln2} ${c.content}`)
-        .join("\n")}
-\`\`\`
+    - <line_number>
+      - <line_number> 는 코드 줄 번호를 의미합니다.
+      - '### Code for review'에서 각 코드 줄 번호를 참고하세요.
+      - 코드 줄 번호가 연속적이라면 범위로 표시해주세요. 예시: "1-3"
+      - 코드에 줄 번호를 표시할 수 없다면 해당 리뷰는 제외해주세요.
+    - <review_comment>
+      - <review_comment>는 리뷰잉한 댓글을 의미합니다.
+      - <review_comment>가 애매하다면 해당 리뷰는 제외해주세요.
+- 해당 코드에 리뷰가 없다면 "reviews"를 빈 배열로 두세요.
+- <review_comment> 의 내용은 한글로 출력해주세요.
 `;
 }
 function getAIResponse(prompt) {
@@ -205,7 +222,7 @@ function getAIResponse(prompt) {
         }
     });
 }
-function createComment(file, chunk, aiResponses) {
+function createComment(file, aiResponses) {
     return aiResponses.flatMap((aiResponse) => {
         if (!file.to) {
             return [];
@@ -282,10 +299,6 @@ function main() {
         });
         const comments = yield analyzeCode(filteredDiff, prDetails);
         if (comments.length > 0) {
-            // for (let i = 0; i < comments.length; i += 20) {
-            //   const commentSlice = comments.slice(i, i + 20);
-            //   // 동기적 for loop를 사용하여 20개씩 댓글을 작성합니다.
-            // }
             yield createReviewComments(prDetails.owner, prDetails.repo, prDetails.pull_number, comments);
         }
     });

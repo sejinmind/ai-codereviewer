@@ -18,6 +18,9 @@ inputs:
     description: "Model provider."
     required: false
     default: "openai"
+  PROMPT_ADDITIONAL_REQUIREMENTS:
+    description: "Additional requirements for the code review."
+    required: false
   exclude:
     description: "Glob patterns to exclude files from the diff analysis"
     required: false

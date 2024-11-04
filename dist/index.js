@@ -128,12 +128,14 @@ function createPrompt(file, prDetails) {
    ${file.chunks.map((chunk) => chunk.content).join("\n")}
   \`\`\`
 
-- diff
-    ${file.chunks.map((chunk) => {
-        return chunk.changes.map((change) => {
+- multiple diffs
+${file.chunks.map((chunk, index) => {
+        return `
+    - [no.${index + 1} diff]
+${chunk.changes.map((change) => {
             // @ts-expect-error - ln and ln2 exists where needed
-            return `${change.ln ? change.ln : change.ln2} ${change.content}`;
-        }).join("\n");
+            return `\n        - [line: ${change.ln ? change.ln : change.ln2}]:${change.content}`;
+        }).join("\n")}`;
     }).join("\n")}
 
 

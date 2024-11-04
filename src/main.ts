@@ -197,6 +197,9 @@ function createComment(
     if (!file.to) {
       return [];
     }
+    if (!aiResponse.lineNumber || !aiResponse.reviewComment) {
+      return [];
+    }
     return {
       body: aiResponse.reviewComment,
       path: file.to,

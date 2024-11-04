@@ -201,6 +201,7 @@ function createComment(
       return [];
     }
     console.log(aiResponse);
+    console.log(chunk);
     return {
       body: aiResponse.reviewComment,
       path: file.to,

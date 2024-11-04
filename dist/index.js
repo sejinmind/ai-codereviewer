@@ -213,11 +213,18 @@ function createComment(file, chunk, aiResponses) {
         if (!aiResponse.lineNumber || !aiResponse.reviewComment) {
             return [];
         }
-        console.log(aiResponse);
+        let lineNumber = 0;
+        if (aiResponse.lineNumber.split("-").length > 1) {
+            const [start, end] = aiResponse.lineNumber.split("-").map(Number);
+            lineNumber = end;
+        }
+        else {
+            lineNumber = Number(aiResponse.lineNumber);
+        }
         return {
             body: aiResponse.reviewComment,
             path: file.to,
-            line: Number(aiResponse.lineNumber),
+            line: lineNumber,
         };
     });
 }

@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import * as core from "@actions/core";
 import OpenAI from "openai";
 import { Octokit } from "@octokit/rest";
-import parseDiff, { Chunk, File } from "parse-diff";
+import parseDiff, { File } from "parse-diff";
 import minimatch from "minimatch";
 import Anthropic from "@anthropic-ai/sdk";
 import { TextBlock } from "@anthropic-ai/sdk/resources";
@@ -126,6 +126,7 @@ function createPrompt(file: File, prDetails: PRDetails): string {
 
 ### Don't include
 - 검토 및 고려사항은 같은 모호한것들은 절대 포함하지 마세요.
+- 권장의 늬앙스가 담긴 코드 리뷰는 하지 마세요.
 - 코드에 대한 긍정적인 댓글이나 칭찬을 포함하지 마세요.
 - 코드에 주석 추가를 절대 제안하지 마세요.
 

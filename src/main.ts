@@ -200,6 +200,7 @@ function createComment(
     if (!aiResponse.lineNumber || !aiResponse.reviewComment) {
       return [];
     }
+    console.log(aiResponse);
     return {
       body: aiResponse.reviewComment,
       path: file.to,

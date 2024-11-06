@@ -5,6 +5,9 @@
   "main": "lib/main.js",
   "author": "Ville Saukkonen",
   "license": "MIT",
+  "engines": {
+    "node": ">=20 <21"
+  },
   "scripts": {
     "build": "npx tsc",
     "package": "npx ncc build --source-map --license licenses.txt",

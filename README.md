@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: AI Code Reviewer
-        uses: drakejin/ai-codereviewer@main
+        uses: sejinmind/ai-codereviewer@main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AI_MODEL: "gpt-4-1106-preview"  # 필수

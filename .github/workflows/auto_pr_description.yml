@@ -1,0 +1,18 @@
+name: Autofill PR Description
+
+on: pull_request
+
+jobs:
+  openai-pr-description:
+    runs-on: ubuntu-22.04
+    env:
+      INPUT_MODEL_SAMPLE_RESPONSE: ${{ vars.INPUT_MODEL_SAMPLE_RESPONSE }}
+      INPUT_MODEL_SAMPLE_PROMPT: ${{ vars.SAMPLE_PROMPT }}
+    steps:
+      - uses: sejinmind/openai-pr-description@master
+        with:
+          max_tokens: 2000
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          openai_model: ${{ vars.OPENAI_API_MODEL }}
+          language: "Korean"

@@ -1,10 +1,10 @@
 # AI Code Reviewer
 
-AI Code Reviewer는 OpenAI의 GPT-4 API 또는 Anthropic의 Claude API를 활용하여 풀 리퀘스트에 대한 지능형 피드백과 제안을 제공하는 GitHub Action입니다.
+AI Code Reviewer는 OpenAI의 GPT API 또는 Anthropic의 Claude API를 활용하여 풀 리퀘스트에 대한 지능형 피드백과 제안을 제공하는 GitHub Action입니다.
 
 ## Features
 
-- OpenAI GPT-4 또는 Anthropic Claude를 사용한 코드 리뷰
+- OpenAI GPT 또는 Anthropic Claude를 사용한 코드 리뷰
 - 코드 개선을 위한 지능형 코멘트 및 제안
 - 지정된 패턴의 파일 제외 기능
 - 간편한 설정 및 GitHub 워크플로우 통합
@@ -45,8 +45,8 @@ jobs:
         uses: sejinmind/ai-codereviewer@main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          AI_MODEL: "gpt-4-1106-preview"  # 필수
-          MODEL_PROVIDER: "openai"  # "openai" 또는 "anthropic"
+          AI_MODEL: "gpt-4-1106-preview" # 필수
+          MODEL_PROVIDER: "openai" # "openai" 또는 "anthropic"
           # OpenAI 설정 (선택사항)
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Anthropic 설정 (선택사항)
@@ -60,16 +60,16 @@ jobs:
 
 ## Configuration
 
-| 입력 변수 | 필수 여부 | 기본값 | 설명 |
-|------------|----------|---------|-------------|
-| GITHUB_TOKEN | 필수 | - | GitHub API 접근용 토큰 |
-| MODEL_PROVIDER | 필수 | openai | 사용할 AI 제공자 ("openai" 또는 "anthropic") |
-| AI_MODEL | 필수 | gpt-4 | 사용할 AI 모델 |
-| OPENAI_API_KEY | 선택 | - | OpenAI API 키 |
-| ANTHROPIC_API_KEY | 선택 | - | Anthropic API 키 |
-| MAX_OUTPUT_TOKENS | 선택 | 4096 | AI 응답의 최대 토큰 수 |
-| MAX_CONTEXT_TOKENS | 선택 | 16384 | 입력 컨텍스트의 최대 토큰 수 |
-| IGNORE_PATTERNS | 선택 | - | 리뷰에서 제외할 파일 패턴 (npm minimatch 모듈 사용) |
+| 입력 변수          | 필수 여부 | 기본값 | 설명                                                |
+| ------------------ | --------- | ------ | --------------------------------------------------- |
+| GITHUB_TOKEN       | 필수      | -      | GitHub API 접근용 토큰                              |
+| MODEL_PROVIDER     | 필수      | openai | 사용할 AI 제공자 ("openai" 또는 "anthropic")        |
+| AI_MODEL           | 필수      | gpt-4  | 사용할 AI 모델                                      |
+| OPENAI_API_KEY     | 선택      | -      | OpenAI API 키                                       |
+| ANTHROPIC_API_KEY  | 선택      | -      | Anthropic API 키                                    |
+| MAX_OUTPUT_TOKENS  | 선택      | 4096   | AI 응답의 최대 토큰 수                              |
+| MAX_CONTEXT_TOKENS | 선택      | 16384  | 입력 컨텍스트의 최대 토큰 수                        |
+| IGNORE_PATTERNS    | 선택      | -      | 리뷰에서 제외할 파일 패턴 (npm minimatch 모듈 사용) |
 
 ## How It Works
 

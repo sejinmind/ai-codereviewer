@@ -3,12 +3,14 @@ import * as core from "@actions/core";
 import OpenAI from "openai";
 import { Octokit } from "@octokit/rest";
 import parseDiff, { File } from "parse-diff";
-import minimatch from "minimatch";
+import { minimatch } from "minimatch";
 import Anthropic from "@anthropic-ai/sdk";
 import { TextBlock } from "@anthropic-ai/sdk/resources";
 
-const MAX_OUTPUT_TOKENS: number = Number(core.getInput("MAX_OUTPUT_TOKENS")) || 4096;
-const MAX_CONTEXT_TOKENS: number = Number(core.getInput("MAX_CONTEXT_TOKENS")) || 16384;
+const MAX_OUTPUT_TOKENS: number =
+  Number(core.getInput("MAX_OUTPUT_TOKENS")) || 4096;
+const MAX_CONTEXT_TOKENS: number =
+  Number(core.getInput("MAX_CONTEXT_TOKENS")) || 16384;
 const GITHUB_TOKEN: string = core.getInput("GITHUB_TOKEN");
 const OPENAI_API_KEY: string = core.getInput("OPENAI_API_KEY");
 const AI_MODEL: string = core.getInput("AI_MODEL");
@@ -36,7 +38,7 @@ interface PRDetails {
 
 async function getPRDetails(): Promise<PRDetails> {
   const { repository, number } = JSON.parse(
-    readFileSync(process.env.GITHUB_EVENT_PATH || "", "utf8")
+    readFileSync(process.env.GITHUB_EVENT_PATH || "", "utf8"),
   );
   const prResponse = await octokit.pulls.get({
     owner: repository.owner.login,
@@ -55,7 +57,7 @@ async function getPRDetails(): Promise<PRDetails> {
 async function getDiff(
   owner: string,
   repo: string,
-  pull_number: number
+  pull_number: number,
 ): Promise<string | null> {
   const response = await octokit.pulls.get({
     owner,
@@ -69,21 +71,21 @@ async function getDiff(
 
 async function analyzeCode(
   parsedDiff: File[],
-  prDetails: PRDetails
+  prDetails: PRDetails,
 ): Promise<Array<{ body: string; path: string; line: number }>> {
   const comments: Array<{ body: string; path: string; line: number }> = [];
 
   for (const file of parsedDiff) {
     if (file.to === "/dev/null") continue; // Ignore deleted files
-      const prompt = createPrompt(file, prDetails);
-      console.log(prompt);
-      const aiResponse = await getAIResponse(file, prompt);
-      if (aiResponse) {
-        const newComments = createComment(file, aiResponse);
-        if (newComments) {
-          comments.push(...newComments);
-        }
+    const prompt = createPrompt(file, prDetails);
+    console.log(prompt);
+    const aiResponse = await getAIResponse(file, prompt);
+    if (aiResponse) {
+      const newComments = createComment(file, aiResponse);
+      if (newComments) {
+        comments.push(...newComments);
       }
+    }
   }
   return comments;
 }
@@ -108,14 +110,18 @@ function createPrompt(file: File, prDetails: PRDetails): string {
   \`\`\`
 
 - multiple diffs
-${file.chunks.map((chunk, index) => {
-  return `
-    - [no.${index+1} diff]
-${chunk.changes.map((change) => {
-  // @ts-expect-error - ln and ln2 exists where needed
-  return `\n        - [line: ${change.ln ? change.ln : change.ln2}]:${change.content}`
-}).join("\n")}`
-}).join("\n")}
+${file.chunks
+  .map((chunk, index) => {
+    return `
+    - [no.${index + 1} diff]
+${chunk.changes
+  .map((change) => {
+    // @ts-expect-error - ln and ln2 exists where needed
+    return `\n        - [line: ${change.ln ? change.ln : change.ln2}]:${change.content}`;
+  })
+  .join("\n")}`;
+  })
+  .join("\n")}
 
 
 # Reviewing Guide
@@ -153,19 +159,21 @@ ${process.env.ADDITIONAL_REQUIREMENTS}
 - 해당 코드에 리뷰가 없다면 "reviews"를 빈 배열로 두세요.
 - <review_comment> 의 내용은 한글로 출력해주세요.
 `;
-
 }
 
 function estimateTokenCount(text: string): number {
   // 대략적인 추정: 영어 기준 1토큰 ≈ 4글자
   // 한글은 1글자당 약 2-3토큰 소비
-  const englishCharCount = text.replace(/[^a-zA-Z0-9\s]/g, '').length;
-  const koreanCharCount = text.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣]/g, '').length;
+  const englishCharCount = text.replace(/[^a-zA-Z0-9\s]/g, "").length;
+  const koreanCharCount = text.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣]/g, "").length;
 
-  return Math.ceil(englishCharCount / 4) + (koreanCharCount * 2);
+  return Math.ceil(englishCharCount / 4) + koreanCharCount * 2;
 }
 
-async function getAIResponse(file: File, prompt: string): Promise<Array<{
+async function getAIResponse(
+  file: File,
+  prompt: string,
+): Promise<Array<{
   lineNumber: string;
   reviewComment: string;
 }> | null> {
@@ -174,7 +182,9 @@ async function getAIResponse(file: File, prompt: string): Promise<Array<{
     console.log(`Estimated input token count: ${estimatedTokens}`);
 
     if (estimatedTokens > MAX_CONTEXT_TOKENS) {
-      console.warn(`${file.to}: Input tokens (${estimatedTokens}) is too large`);
+      console.warn(
+        `${file.to}: Input tokens (${estimatedTokens}) is too large`,
+      );
       return [];
     }
 
@@ -182,7 +192,7 @@ async function getAIResponse(file: File, prompt: string): Promise<Array<{
       const response = await anthropic.messages.create({
         model: AI_MODEL,
         max_tokens: MAX_OUTPUT_TOKENS,
-        temperature: 0.2,
+        temperature: 0.1,
         messages: [
           {
             role: "user",
@@ -194,13 +204,13 @@ async function getAIResponse(file: File, prompt: string): Promise<Array<{
         return [];
       }
       const textBlock = response.content[0] as TextBlock;
-      const res = textBlock.text.trim() || '{}';
+      const res = textBlock.text.trim() || "{}";
       const cleanedJsonString = res.replace(/```json|```/g, "");
       return JSON.parse(cleanedJsonString).reviews;
     } else {
       const queryConfig = {
         model: AI_MODEL,
-        temperature: 0.2,
+        temperature: 0.1,
         max_tokens: MAX_OUTPUT_TOKENS,
         top_p: 1,
         frequency_penalty: 0,
@@ -237,7 +247,7 @@ function createComment(
   aiResponses: Array<{
     lineNumber: string;
     reviewComment: string;
-  }>
+  }>,
 ): Array<{ body: string; path: string; line: number; start_line?: number }> {
   return aiResponses.flatMap((aiResponse) => {
     if (!file.to) {
@@ -247,8 +257,8 @@ function createComment(
       return [];
     }
 
-    if (aiResponse.lineNumber.includes('-')) {
-      const [start, end] = aiResponse.lineNumber.split('-').map(Number);
+    if (aiResponse.lineNumber.includes("-")) {
+      const [start, end] = aiResponse.lineNumber.split("-").map(Number);
       return {
         body: aiResponse.reviewComment,
         path: file.to,
@@ -269,12 +279,17 @@ async function createReviewComments(
   owner: string,
   repo: string,
   pull_number: number,
-  comments: Array<{ body: string; path: string; line: number; start_line?: number }>
+  comments: Array<{
+    body: string;
+    path: string;
+    line: number;
+    start_line?: number;
+  }>,
 ): Promise<void> {
-  const commentsWithSide = comments.map(comment => ({
+  const commentsWithSide = comments.map((comment) => ({
     ...comment,
-    side: 'RIGHT',
-    start_side: comment.start_line ? 'RIGHT' : undefined,
+    side: "RIGHT",
+    start_side: comment.start_line ? "RIGHT" : undefined,
   }));
 
   await octokit.pulls.createReview({
@@ -282,7 +297,7 @@ async function createReviewComments(
     repo,
     pull_number,
     comments: commentsWithSide,
-    event: 'COMMENT',
+    event: "COMMENT",
   });
 }
 
@@ -290,14 +305,14 @@ async function main() {
   const prDetails = await getPRDetails();
   let diff: string | null;
   const eventData = JSON.parse(
-    readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8")
+    readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8"),
   );
 
   if (eventData.action === "opened") {
     diff = await getDiff(
       prDetails.owner,
       prDetails.repo,
-      prDetails.pull_number
+      prDetails.pull_number,
     );
   } else if (eventData.action === "synchronize") {
     const newBaseSha = eventData.before;
@@ -326,13 +341,11 @@ async function main() {
 
   const parsedDiff = parseDiff(diff);
 
-  const excludePatterns = IGNORE_PATTERNS
-    .split(",")
-    .map((s) => s.trim());
+  const excludePatterns = IGNORE_PATTERNS.split(",").map((s) => s.trim());
 
   const filteredDiff = parsedDiff.filter((file) => {
     return !excludePatterns.some((pattern) =>
-      minimatch(file.to ?? "", pattern)
+      minimatch(file.to ?? "", pattern),
     );
   });
 

@@ -39,15 +39,6 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -74,54 +65,47 @@ const openai = new openai_1.default({
 const anthropic = new sdk_1.default({
     apiKey: ANTHROPIC_API_KEY,
 });
-function getPRDetails() {
-    return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b;
-        const { repository, number } = JSON.parse((0, fs_1.readFileSync)(process.env.GITHUB_EVENT_PATH || "", "utf8"));
-        const prResponse = yield octokit.pulls.get({
-            owner: repository.owner.login,
-            repo: repository.name,
-            pull_number: number,
-        });
-        return {
-            owner: repository.owner.login,
-            repo: repository.name,
-            pull_number: number,
-            title: (_a = prResponse.data.title) !== null && _a !== void 0 ? _a : "",
-            description: (_b = prResponse.data.body) !== null && _b !== void 0 ? _b : "",
-        };
+async function getPRDetails() {
+    const { repository, number } = JSON.parse((0, fs_1.readFileSync)(process.env.GITHUB_EVENT_PATH || "", "utf8"));
+    const prResponse = await octokit.pulls.get({
+        owner: repository.owner.login,
+        repo: repository.name,
+        pull_number: number,
     });
+    return {
+        owner: repository.owner.login,
+        repo: repository.name,
+        pull_number: number,
+        title: prResponse.data.title ?? "",
+        description: prResponse.data.body ?? "",
+    };
 }
-function getDiff(owner, repo, pull_number) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const response = yield octokit.pulls.get({
-            owner,
-            repo,
-            pull_number,
-            mediaType: { format: "diff" },
-        });
-        // @ts-expect-error - response.data is a string
-        return response.data;
+async function getDiff(owner, repo, pull_number) {
+    const response = await octokit.pulls.get({
+        owner,
+        repo,
+        pull_number,
+        mediaType: { format: "diff" },
     });
+    // @ts-expect-error - response.data is a string
+    return response.data;
 }
-function analyzeCode(parsedDiff, prDetails) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const comments = [];
-        for (const file of parsedDiff) {
-            if (file.to === "/dev/null")
-                continue; // Ignore deleted files
-            const prompt = createPrompt(file, prDetails);
-            console.log(prompt);
-            const aiResponse = yield getAIResponse(file, prompt);
-            if (aiResponse) {
-                const newComments = createComment(file, aiResponse);
-                if (newComments) {
-                    comments.push(...newComments);
-                }
+async function analyzeCode(parsedDiff, prDetails) {
+    const comments = [];
+    for (const file of parsedDiff) {
+        if (file.to === "/dev/null")
+            continue; // Ignore deleted files
+        const prompt = createPrompt(file, prDetails);
+        console.log(prompt);
+        const aiResponse = await getAIResponse(file, prompt);
+        if (aiResponse) {
+            const newComments = createComment(file, aiResponse);
+            if (newComments) {
+                comments.push(...newComments);
             }
         }
-        return comments;
-    });
+    }
+    return comments;
 }
 function createPrompt(file, prDetails) {
     return `
@@ -200,66 +184,88 @@ function estimateTokenCount(text) {
     const koreanCharCount = text.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣]/g, "").length;
     return Math.ceil(englishCharCount / 4) + koreanCharCount * 2;
 }
-function getAIResponse(file, prompt) {
-    return __awaiter(this, void 0, void 0, function* () {
-        var _a, _b;
-        try {
-            const estimatedTokens = estimateTokenCount(prompt);
-            console.log(`Estimated input token count: ${estimatedTokens}`);
-            if (estimatedTokens > MAX_CONTEXT_TOKENS) {
-                console.warn(`${file.to}: Input tokens (${estimatedTokens}) is too large`);
+function isChatCompletionModel(model) {
+    // codex/instruct-style models require the completions endpoint instead of chat
+    const lower = model.toLowerCase();
+    return !(lower.includes("codex") ||
+        lower.includes("instruct") ||
+        lower.includes("davinci") ||
+        lower.includes("babbage") ||
+        lower.includes("curie") ||
+        lower.includes("ada"));
+}
+async function getAIResponse(file, prompt) {
+    try {
+        const estimatedTokens = estimateTokenCount(prompt);
+        console.log(`Estimated input token count: ${estimatedTokens}`);
+        if (estimatedTokens > MAX_CONTEXT_TOKENS) {
+            console.warn(`${file.to}: Input tokens (${estimatedTokens}) is too large`);
+            return [];
+        }
+        if (MODEL_PROVIDER === "anthropic") {
+            const response = await anthropic.messages.create({
+                model: AI_MODEL,
+                max_tokens: MAX_OUTPUT_TOKENS,
+                temperature: 0.1,
+                messages: [
+                    {
+                        role: "user",
+                        content: prompt,
+                    },
+                ],
+            });
+            if (response.content.length === 0) {
                 return [];
             }
-            if (MODEL_PROVIDER === "anthropic") {
-                const response = yield anthropic.messages.create({
-                    model: AI_MODEL,
-                    max_tokens: MAX_OUTPUT_TOKENS,
-                    temperature: 0.1,
+            const textBlock = response.content[0];
+            const res = textBlock.text.trim() || "{}";
+            const cleanedJsonString = res.replace(/```json|```/g, "");
+            return JSON.parse(cleanedJsonString).reviews;
+        }
+        else {
+            const queryConfig = {
+                model: AI_MODEL,
+                temperature: 0.1,
+                max_tokens: MAX_OUTPUT_TOKENS,
+                top_p: 1,
+                frequency_penalty: 0,
+                presence_penalty: 0,
+            };
+            let res = '';
+            if (isChatCompletionModel(AI_MODEL)) {
+                const response = await openai.chat.completions.create({
+                    ...queryConfig,
+                    response_format: { type: "json_object" },
                     messages: [
-                        {
-                            role: "user",
-                            content: prompt,
-                        },
-                    ],
-                });
-                if (response.content.length === 0) {
-                    return [];
-                }
-                const textBlock = response.content[0];
-                const res = textBlock.text.trim() || "{}";
-                const cleanedJsonString = res.replace(/```json|```/g, "");
-                return JSON.parse(cleanedJsonString).reviews;
-            }
-            else {
-                const queryConfig = {
-                    model: AI_MODEL,
-                    temperature: 0.1,
-                    max_tokens: MAX_OUTPUT_TOKENS,
-                    top_p: 1,
-                    frequency_penalty: 0,
-                    presence_penalty: 0,
-                };
-                const response = yield openai.chat.completions.create(Object.assign(Object.assign(Object.assign({}, queryConfig), (AI_MODEL === "gpt-4-1106-preview"
-                    ? { response_format: { type: "json_object" } }
-                    : {})), { messages: [
                         {
                             role: "system",
                             content: prompt,
                         },
-                    ] }));
+                    ],
+                });
                 if (response.choices.length === 0) {
                     return [];
                 }
-                const res = ((_b = (_a = response.choices[0].message) === null || _a === void 0 ? void 0 : _a.content) === null || _b === void 0 ? void 0 : _b.trim()) || "{}";
-                const cleanedJsonString = res.replace(/```json|```/g, "");
-                return JSON.parse(cleanedJsonString).reviews;
+                res = response.choices[0].message?.content?.trim() || "{}";
             }
+            else {
+                const response = await openai.completions.create({
+                    ...queryConfig,
+                    prompt,
+                });
+                if (response.choices.length === 0) {
+                    return [];
+                }
+                res = response.choices[0].text?.trim() || "{}";
+            }
+            const cleanedJsonString = res.replace(/```json|```/g, "");
+            return JSON.parse(cleanedJsonString).reviews;
         }
-        catch (error) {
-            console.error("Error:", error);
-            return null;
-        }
-    });
+    }
+    catch (error) {
+        console.error("Error:", error);
+        return null;
+    }
 }
 function createComment(file, aiResponses) {
     return aiResponses.flatMap((aiResponse) => {
@@ -285,59 +291,58 @@ function createComment(file, aiResponses) {
         };
     });
 }
-function createReviewComments(owner, repo, pull_number, comments) {
-    return __awaiter(this, void 0, void 0, function* () {
-        const commentsWithSide = comments.map((comment) => (Object.assign(Object.assign({}, comment), { side: "RIGHT", start_side: comment.start_line ? "RIGHT" : undefined })));
-        yield octokit.pulls.createReview({
-            owner,
-            repo,
-            pull_number,
-            comments: commentsWithSide,
-            event: "COMMENT",
-        });
+async function createReviewComments(owner, repo, pull_number, comments) {
+    const commentsWithSide = comments.map((comment) => ({
+        ...comment,
+        side: "RIGHT",
+        start_side: comment.start_line ? "RIGHT" : undefined,
+    }));
+    await octokit.pulls.createReview({
+        owner,
+        repo,
+        pull_number,
+        comments: commentsWithSide,
+        event: "COMMENT",
     });
 }
-function main() {
-    return __awaiter(this, void 0, void 0, function* () {
-        var _a;
-        const prDetails = yield getPRDetails();
-        let diff;
-        const eventData = JSON.parse((0, fs_1.readFileSync)((_a = process.env.GITHUB_EVENT_PATH) !== null && _a !== void 0 ? _a : "", "utf8"));
-        if (eventData.action === "opened") {
-            diff = yield getDiff(prDetails.owner, prDetails.repo, prDetails.pull_number);
-        }
-        else if (eventData.action === "synchronize") {
-            const newBaseSha = eventData.before;
-            const newHeadSha = eventData.after;
-            const response = yield octokit.repos.compareCommits({
-                headers: {
-                    accept: "application/vnd.github.v3.diff",
-                },
-                owner: prDetails.owner,
-                repo: prDetails.repo,
-                base: newBaseSha,
-                head: newHeadSha,
-            });
-            diff = String(response.data);
-        }
-        else {
-            console.log("Unsupported event:", process.env.GITHUB_EVENT_NAME);
-            return;
-        }
-        if (!diff) {
-            console.log("No diff found");
-            return;
-        }
-        const parsedDiff = (0, parse_diff_1.default)(diff);
-        const excludePatterns = IGNORE_PATTERNS.split(",").map((s) => s.trim());
-        const filteredDiff = parsedDiff.filter((file) => {
-            return !excludePatterns.some((pattern) => { var _a; return (0, minimatch_1.minimatch)((_a = file.to) !== null && _a !== void 0 ? _a : "", pattern); });
+async function main() {
+    const prDetails = await getPRDetails();
+    let diff;
+    const eventData = JSON.parse((0, fs_1.readFileSync)(process.env.GITHUB_EVENT_PATH ?? "", "utf8"));
+    if (eventData.action === "opened") {
+        diff = await getDiff(prDetails.owner, prDetails.repo, prDetails.pull_number);
+    }
+    else if (eventData.action === "synchronize") {
+        const newBaseSha = eventData.before;
+        const newHeadSha = eventData.after;
+        const response = await octokit.repos.compareCommits({
+            headers: {
+                accept: "application/vnd.github.v3.diff",
+            },
+            owner: prDetails.owner,
+            repo: prDetails.repo,
+            base: newBaseSha,
+            head: newHeadSha,
         });
-        const comments = yield analyzeCode(filteredDiff, prDetails);
-        if (comments.length > 0) {
-            yield createReviewComments(prDetails.owner, prDetails.repo, prDetails.pull_number, comments);
-        }
+        diff = String(response.data);
+    }
+    else {
+        console.log("Unsupported event:", process.env.GITHUB_EVENT_NAME);
+        return;
+    }
+    if (!diff) {
+        console.log("No diff found");
+        return;
+    }
+    const parsedDiff = (0, parse_diff_1.default)(diff);
+    const excludePatterns = IGNORE_PATTERNS.split(",").map((s) => s.trim());
+    const filteredDiff = parsedDiff.filter((file) => {
+        return !excludePatterns.some((pattern) => (0, minimatch_1.minimatch)(file.to ?? "", pattern));
     });
+    const comments = await analyzeCode(filteredDiff, prDetails);
+    if (comments.length > 0) {
+        await createReviewComments(prDetails.owner, prDetails.repo, prDetails.pull_number, comments);
+    }
 }
 main().catch((error) => {
     console.error("Error:", error);
@@ -4117,7 +4122,7 @@ exports.partialParse = partialParse;
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _BaseAnthropic_instances, _a, _BaseAnthropic_encoder, _BaseAnthropic_baseURLOverridden;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.AI_PROMPT = exports.HUMAN_PROMPT = exports.Anthropic = exports.BaseAnthropic = void 0;
+exports.Anthropic = exports.BaseAnthropic = exports.AI_PROMPT = exports.HUMAN_PROMPT = void 0;
 const tslib_1 = __nccwpck_require__(5219);
 const uuid_1 = __nccwpck_require__(4458);
 const values_1 = __nccwpck_require__(9171);
@@ -4141,6 +4146,8 @@ const headers_1 = __nccwpck_require__(2709);
 const env_1 = __nccwpck_require__(6482);
 const log_1 = __nccwpck_require__(5296);
 const values_2 = __nccwpck_require__(9171);
+exports.HUMAN_PROMPT = '\\n\\nHuman:';
+exports.AI_PROMPT = '\\n\\nAssistant:';
 /**
  * Base class for Anthropic API clients.
  */
@@ -4186,7 +4193,7 @@ class BaseAnthropic {
         this.fetch = options.fetch ?? Shims.getDefaultFetch();
         tslib_1.__classPrivateFieldSet(this, _BaseAnthropic_encoder, Opts.FallbackEncoder, "f");
         this._options = options;
-        this.apiKey = apiKey;
+        this.apiKey = typeof apiKey === 'string' ? apiKey : null;
         this.authToken = authToken;
     }
     /**
@@ -4212,6 +4219,9 @@ class BaseAnthropic {
         return this._options.defaultQuery;
     }
     validateHeaders({ values, nulls }) {
+        if (values.get('x-api-key') || values.get('authorization')) {
+            return;
+        }
         if (this.apiKey && values.get('x-api-key')) {
             return;
         }
@@ -4285,7 +4295,7 @@ class BaseAnthropic {
         const defaultTimeout = 10 * 60;
         const expectedTimeout = (60 * 60 * maxTokens) / 128000;
         if (expectedTimeout > defaultTimeout) {
-            throw new Errors.AnthropicError('Streaming is strongly recommended for operations that may take longer than 10 minutes. ' +
+            throw new Errors.AnthropicError('Streaming is required for operations that may take longer than 10 minutes. ' +
                 'See https://github.com/anthropics/anthropic-sdk-typescript#streaming-responses for more details');
         }
         return defaultTimeout * 1000;
@@ -4352,7 +4362,7 @@ class BaseAnthropic {
         const controller = new AbortController();
         const response = await this.fetchWithTimeout(url, req, timeout, controller).catch(errors_1.castToError);
         const headersTime = Date.now();
-        if (response instanceof Error) {
+        if (response instanceof globalThis.Error) {
             const retryMessage = `retrying, ${retriesRemaining} attempts remaining`;
             if (options.signal?.aborted) {
                 throw new Errors.APIUserAbortError();
@@ -4528,11 +4538,11 @@ class BaseAnthropic {
         return sleepSeconds * jitter * 1000;
     }
     calculateNonstreamingTimeout(maxTokens, maxNonstreamingTokens) {
-        const maxTime = 60 * 60 * 1000; // 10 minutes
+        const maxTime = 60 * 60 * 1000; // 60 minutes
         const defaultTime = 60 * 10 * 1000; // 10 minutes
         const expectedTime = (maxTime * maxTokens) / 128000;
         if (expectedTime > defaultTime || (maxNonstreamingTokens != null && maxTokens > maxNonstreamingTokens)) {
-            throw new Errors.AnthropicError('Streaming is strongly recommended for operations that may token longer than 10 minutes. See https://github.com/anthropics/anthropic-sdk-typescript#long-requests for more details');
+            throw new Errors.AnthropicError('Streaming is required for operations that may take longer than 10 minutes. See https://github.com/anthropics/anthropic-sdk-typescript#long-requests for more details');
         }
         return defaultTime;
     }
@@ -4599,7 +4609,7 @@ class BaseAnthropic {
                 // Preserve legacy string encoding behavior for now
                 headers.values.has('content-type')) ||
             // `Blob` is superset of `File`
-            body instanceof Blob ||
+            (globalThis.Blob && body instanceof globalThis.Blob) ||
             // `FormData` -> `multipart/form-data`
             body instanceof FormData ||
             // `URLSearchParams` -> `application/x-www-form-urlencoded`
@@ -4623,8 +4633,8 @@ _a = BaseAnthropic, _BaseAnthropic_encoder = new WeakMap(), _BaseAnthropic_insta
     return this.baseURL !== 'https://api.anthropic.com';
 };
 BaseAnthropic.Anthropic = _a;
-BaseAnthropic.HUMAN_PROMPT = '\n\nHuman:';
-BaseAnthropic.AI_PROMPT = '\n\nAssistant:';
+BaseAnthropic.HUMAN_PROMPT = exports.HUMAN_PROMPT;
+BaseAnthropic.AI_PROMPT = exports.AI_PROMPT;
 BaseAnthropic.DEFAULT_TIMEOUT = 600000; // 10 minutes
 BaseAnthropic.AnthropicError = Errors.AnthropicError;
 BaseAnthropic.APIError = Errors.APIError;
@@ -4657,7 +4667,6 @@ Anthropic.Completions = completions_1.Completions;
 Anthropic.Messages = messages_1.Messages;
 Anthropic.Models = models_1.Models;
 Anthropic.Beta = beta_1.Beta;
-exports.HUMAN_PROMPT = Anthropic.HUMAN_PROMPT, exports.AI_PROMPT = Anthropic.AI_PROMPT;
 //# sourceMappingURL=client.js.map
 
 /***/ }),
@@ -4874,7 +4883,7 @@ exports.InternalServerError = InternalServerError;
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _AbstractPage_client;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.Page = exports.PagePromise = exports.AbstractPage = void 0;
+exports.PageCursor = exports.TokenPage = exports.Page = exports.PagePromise = exports.AbstractPage = void 0;
 const tslib_1 = __nccwpck_require__(5219);
 const error_1 = __nccwpck_require__(5063);
 const parse_1 = __nccwpck_require__(3964);
@@ -4992,6 +5001,68 @@ class Page extends AbstractPage {
     }
 }
 exports.Page = Page;
+class TokenPage extends AbstractPage {
+    constructor(client, response, body, options) {
+        super(client, response, body, options);
+        this.data = body.data || [];
+        this.has_more = body.has_more || false;
+        this.next_page = body.next_page || null;
+    }
+    getPaginatedItems() {
+        return this.data ?? [];
+    }
+    hasNextPage() {
+        if (this.has_more === false) {
+            return false;
+        }
+        return super.hasNextPage();
+    }
+    nextPageRequestOptions() {
+        const cursor = this.next_page;
+        if (!cursor) {
+            return null;
+        }
+        return {
+            ...this.options,
+            query: {
+                ...(0, values_1.maybeObj)(this.options.query),
+                page_token: cursor,
+            },
+        };
+    }
+}
+exports.TokenPage = TokenPage;
+class PageCursor extends AbstractPage {
+    constructor(client, response, body, options) {
+        super(client, response, body, options);
+        this.data = body.data || [];
+        this.has_more = body.has_more || false;
+        this.next_page = body.next_page || null;
+    }
+    getPaginatedItems() {
+        return this.data ?? [];
+    }
+    hasNextPage() {
+        if (this.has_more === false) {
+            return false;
+        }
+        return super.hasNextPage();
+    }
+    nextPageRequestOptions() {
+        const cursor = this.next_page;
+        if (!cursor) {
+            return null;
+        }
+        return {
+            ...this.options,
+            query: {
+                ...(0, values_1.maybeObj)(this.options.query),
+                page: cursor,
+            },
+        };
+    }
+}
+exports.PageCursor = PageCursor;
 //# sourceMappingURL=pagination.js.map
 
 /***/ }),
@@ -5394,6 +5465,9 @@ exports.MODEL_NONSTREAMING_TOKENS = {
     'claude-4-opus-20250514': 8192,
     'anthropic.claude-opus-4-20250514-v1:0': 8192,
     'claude-opus-4@20250514': 8192,
+    'claude-opus-4-1-20250805': 8192,
+    'anthropic.claude-opus-4-1-20250805-v1:0': 8192,
+    'claude-opus-4-1@20250805': 8192,
 };
 //# sourceMappingURL=constants.js.map
 
@@ -6083,7 +6157,7 @@ const isResponseLike = (value) => value != null &&
     typeof value.blob === 'function';
 /**
  * Helper for creating a {@link File} to pass to an SDK upload method from a variety of different data formats
- * @param value the raw content of the file.  Can be an {@link Uploadable}, {@link BlobLikePart}, or {@link AsyncIterable} of {@link BlobLikePart}s
+ * @param value the raw content of the file. Can be an {@link Uploadable}, BlobLikePart, or AsyncIterable of BlobLikeParts
  * @param {string=} name the name of the file. If omitted, toFile will try to determine a file name from bits if possible
  * @param {Object=} options additional properties
  * @param {string=} options.type the MIME type of the content
@@ -6688,7 +6762,7 @@ exports.uuid4 = uuid4;
 
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.safeJSON = exports.maybeCoerceBoolean = exports.maybeCoerceFloat = exports.maybeCoerceInteger = exports.coerceBoolean = exports.coerceFloat = exports.coerceInteger = exports.validatePositiveInteger = exports.ensurePresent = exports.isReadonlyArray = exports.isArray = exports.isAbsoluteURL = void 0;
+exports.pop = exports.safeJSON = exports.maybeCoerceBoolean = exports.maybeCoerceFloat = exports.maybeCoerceInteger = exports.coerceBoolean = exports.coerceFloat = exports.coerceInteger = exports.validatePositiveInteger = exports.ensurePresent = exports.isReadonlyArray = exports.isArray = exports.isAbsoluteURL = void 0;
 exports.maybeObj = maybeObj;
 exports.isEmptyObj = isEmptyObj;
 exports.hasOwn = hasOwn;
@@ -6767,21 +6841,21 @@ const coerceBoolean = (value) => {
 };
 exports.coerceBoolean = coerceBoolean;
 const maybeCoerceInteger = (value) => {
-    if (value === undefined) {
+    if (value == null) {
         return undefined;
     }
     return (0, exports.coerceInteger)(value);
 };
 exports.maybeCoerceInteger = maybeCoerceInteger;
 const maybeCoerceFloat = (value) => {
-    if (value === undefined) {
+    if (value == null) {
         return undefined;
     }
     return (0, exports.coerceFloat)(value);
 };
 exports.maybeCoerceFloat = maybeCoerceFloat;
 const maybeCoerceBoolean = (value) => {
-    if (value === undefined) {
+    if (value == null) {
         return undefined;
     }
     return (0, exports.coerceBoolean)(value);
@@ -6796,6 +6870,13 @@ const safeJSON = (text) => {
     }
 };
 exports.safeJSON = safeJSON;
+// Gets a value from an object, deletes the key, and returns the value (or undefined if not found)
+const pop = (obj, key) => {
+    const value = obj[key];
+    delete obj[key];
+    return value;
+};
+exports.pop = pop;
 //# sourceMappingURL=values.js.map
 
 /***/ }),
@@ -6805,24 +6886,26 @@ exports.safeJSON = safeJSON;
 
 "use strict";
 
-var _BetaMessageStream_instances, _BetaMessageStream_currentMessageSnapshot, _BetaMessageStream_connectedPromise, _BetaMessageStream_resolveConnectedPromise, _BetaMessageStream_rejectConnectedPromise, _BetaMessageStream_endPromise, _BetaMessageStream_resolveEndPromise, _BetaMessageStream_rejectEndPromise, _BetaMessageStream_listeners, _BetaMessageStream_ended, _BetaMessageStream_errored, _BetaMessageStream_aborted, _BetaMessageStream_catchingPromiseCreated, _BetaMessageStream_response, _BetaMessageStream_request_id, _BetaMessageStream_getFinalMessage, _BetaMessageStream_getFinalText, _BetaMessageStream_handleError, _BetaMessageStream_beginRequest, _BetaMessageStream_addStreamEvent, _BetaMessageStream_endRequest, _BetaMessageStream_accumulateMessage;
+var _BetaMessageStream_instances, _BetaMessageStream_currentMessageSnapshot, _BetaMessageStream_params, _BetaMessageStream_connectedPromise, _BetaMessageStream_resolveConnectedPromise, _BetaMessageStream_rejectConnectedPromise, _BetaMessageStream_endPromise, _BetaMessageStream_resolveEndPromise, _BetaMessageStream_rejectEndPromise, _BetaMessageStream_listeners, _BetaMessageStream_ended, _BetaMessageStream_errored, _BetaMessageStream_aborted, _BetaMessageStream_catchingPromiseCreated, _BetaMessageStream_response, _BetaMessageStream_request_id, _BetaMessageStream_getFinalMessage, _BetaMessageStream_getFinalText, _BetaMessageStream_handleError, _BetaMessageStream_beginRequest, _BetaMessageStream_addStreamEvent, _BetaMessageStream_endRequest, _BetaMessageStream_accumulateMessage;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.BetaMessageStream = void 0;
 const tslib_1 = __nccwpck_require__(5219);
-const errors_1 = __nccwpck_require__(6604);
-const error_1 = __nccwpck_require__(8955);
-const streaming_1 = __nccwpck_require__(297);
 const parser_1 = __nccwpck_require__(6757);
+const error_1 = __nccwpck_require__(8955);
+const errors_1 = __nccwpck_require__(6604);
+const streaming_1 = __nccwpck_require__(297);
+const beta_parser_1 = __nccwpck_require__(2751);
 const JSON_BUF_PROPERTY = '__json_buf';
 function tracksToolInput(content) {
     return content.type === 'tool_use' || content.type === 'server_tool_use' || content.type === 'mcp_tool_use';
 }
 class BetaMessageStream {
-    constructor() {
+    constructor(params) {
         _BetaMessageStream_instances.add(this);
         this.messages = [];
         this.receivedMessages = [];
         _BetaMessageStream_currentMessageSnapshot.set(this, void 0);
+        _BetaMessageStream_params.set(this, null);
         this.controller = new AbortController();
         _BetaMessageStream_connectedPromise.set(this, void 0);
         _BetaMessageStream_resolveConnectedPromise.set(this, () => { });
@@ -6871,6 +6954,7 @@ class BetaMessageStream {
         // any promise-returning method.
         tslib_1.__classPrivateFieldGet(this, _BetaMessageStream_connectedPromise, "f").catch(() => { });
         tslib_1.__classPrivateFieldGet(this, _BetaMessageStream_endPromise, "f").catch(() => { });
+        tslib_1.__classPrivateFieldSet(this, _BetaMessageStream_params, params, "f");
     }
     get response() {
         return tslib_1.__classPrivateFieldGet(this, _BetaMessageStream_response, "f");
@@ -6907,15 +6991,16 @@ class BetaMessageStream {
      * in this context.
      */
     static fromReadableStream(stream) {
-        const runner = new BetaMessageStream();
+        const runner = new BetaMessageStream(null);
         runner._run(() => runner._fromReadableStream(stream));
         return runner;
     }
     static createMessage(messages, params, options) {
-        const runner = new BetaMessageStream();
+        const runner = new BetaMessageStream(params);
         for (const message of params.messages) {
             runner._addMessageParam(message);
         }
+        tslib_1.__classPrivateFieldSet(runner, _BetaMessageStream_params, { ...params, stream: true }, "f");
         runner._run(() => runner._createMessage(messages, { ...params, stream: true }, { ...options, headers: { ...options?.headers, 'X-Stainless-Helper-Method': 'stream' } }));
         return runner;
     }
@@ -7050,6 +7135,7 @@ class BetaMessageStream {
     /**
      * @returns a promise that resolves with the the final assistant Message response,
      * or rejects if an error occurred or the stream ended prematurely without producing a Message.
+     * If structured outputs were used, this will be a ParsedMessage with a `parsed` field.
      */
     async finalMessage() {
         await this.done();
@@ -7137,7 +7223,7 @@ class BetaMessageStream {
             }
         }
     }
-    [(_BetaMessageStream_currentMessageSnapshot = new WeakMap(), _BetaMessageStream_connectedPromise = new WeakMap(), _BetaMessageStream_resolveConnectedPromise = new WeakMap(), _BetaMessageStream_rejectConnectedPromise = new WeakMap(), _BetaMessageStream_endPromise = new WeakMap(), _BetaMessageStream_resolveEndPromise = new WeakMap(), _BetaMessageStream_rejectEndPromise = new WeakMap(), _BetaMessageStream_listeners = new WeakMap(), _BetaMessageStream_ended = new WeakMap(), _BetaMessageStream_errored = new WeakMap(), _BetaMessageStream_aborted = new WeakMap(), _BetaMessageStream_catchingPromiseCreated = new WeakMap(), _BetaMessageStream_response = new WeakMap(), _BetaMessageStream_request_id = new WeakMap(), _BetaMessageStream_handleError = new WeakMap(), _BetaMessageStream_instances = new WeakSet(), _BetaMessageStream_getFinalMessage = function _BetaMessageStream_getFinalMessage() {
+    [(_BetaMessageStream_currentMessageSnapshot = new WeakMap(), _BetaMessageStream_params = new WeakMap(), _BetaMessageStream_connectedPromise = new WeakMap(), _BetaMessageStream_resolveConnectedPromise = new WeakMap(), _BetaMessageStream_rejectConnectedPromise = new WeakMap(), _BetaMessageStream_endPromise = new WeakMap(), _BetaMessageStream_resolveEndPromise = new WeakMap(), _BetaMessageStream_rejectEndPromise = new WeakMap(), _BetaMessageStream_listeners = new WeakMap(), _BetaMessageStream_ended = new WeakMap(), _BetaMessageStream_errored = new WeakMap(), _BetaMessageStream_aborted = new WeakMap(), _BetaMessageStream_catchingPromiseCreated = new WeakMap(), _BetaMessageStream_response = new WeakMap(), _BetaMessageStream_request_id = new WeakMap(), _BetaMessageStream_handleError = new WeakMap(), _BetaMessageStream_instances = new WeakSet(), _BetaMessageStream_getFinalMessage = function _BetaMessageStream_getFinalMessage() {
         if (this.receivedMessages.length === 0) {
             throw new error_1.AnthropicError('stream ended without producing a Message with role=assistant');
         }
@@ -7204,7 +7290,7 @@ class BetaMessageStream {
             }
             case 'message_stop': {
                 this._addMessageParam(messageSnapshot);
-                this._addMessage(messageSnapshot, true);
+                this._addMessage((0, beta_parser_1.maybeParseBetaMessage)(messageSnapshot, tslib_1.__classPrivateFieldGet(this, _BetaMessageStream_params, "f")), true);
                 break;
             }
             case 'content_block_stop': {
@@ -7228,7 +7314,7 @@ class BetaMessageStream {
             throw new error_1.AnthropicError(`request ended without sending any chunks`);
         }
         tslib_1.__classPrivateFieldSet(this, _BetaMessageStream_currentMessageSnapshot, undefined, "f");
-        return snapshot;
+        return (0, beta_parser_1.maybeParseBetaMessage)(snapshot, tslib_1.__classPrivateFieldGet(this, _BetaMessageStream_params, "f"));
     }, _BetaMessageStream_accumulateMessage = function _BetaMessageStream_accumulateMessage(event) {
         let snapshot = tslib_1.__classPrivateFieldGet(this, _BetaMessageStream_currentMessageSnapshot, "f");
         if (event.type === 'message_start') {
@@ -7248,6 +7334,7 @@ class BetaMessageStream {
                 snapshot.stop_reason = event.delta.stop_reason;
                 snapshot.stop_sequence = event.delta.stop_sequence;
                 snapshot.usage.output_tokens = event.usage.output_tokens;
+                snapshot.context_management = event.context_management;
                 if (event.usage.input_tokens != null) {
                     snapshot.usage.input_tokens = event.usage.input_tokens;
                 }
@@ -7994,6 +8081,376 @@ function checkNever(x) { }
 
 /***/ }),
 
+/***/ 2751:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.maybeParseBetaMessage = maybeParseBetaMessage;
+exports.parseBetaMessage = parseBetaMessage;
+const error_1 = __nccwpck_require__(5063);
+function maybeParseBetaMessage(message, params) {
+    if (!params || !('parse' in (params.output_format ?? {}))) {
+        return {
+            ...message,
+            content: message.content.map((block) => {
+                if (block.type === 'text') {
+                    return {
+                        ...block,
+                        parsed: null,
+                    };
+                }
+                return block;
+            }),
+            parsed_output: null,
+        };
+    }
+    return parseBetaMessage(message, params);
+}
+function parseBetaMessage(message, params) {
+    let firstParsed = null;
+    const content = message.content.map((block) => {
+        if (block.type === 'text') {
+            const parsed = parseBetaOutputFormat(params, block.text);
+            if (firstParsed === null) {
+                firstParsed = parsed;
+            }
+            return {
+                ...block,
+                parsed,
+            };
+        }
+        return block;
+    });
+    return {
+        ...message,
+        content,
+        parsed_output: firstParsed,
+    };
+}
+function parseBetaOutputFormat(params, content) {
+    if (params.output_format?.type !== 'json_schema') {
+        return null;
+    }
+    try {
+        if ('parse' in params.output_format) {
+            return params.output_format.parse(content);
+        }
+        return JSON.parse(content);
+    }
+    catch (error) {
+        throw new error_1.AnthropicError(`Failed to parse structured output: ${error}`);
+    }
+}
+//# sourceMappingURL=beta-parser.js.map
+
+/***/ }),
+
+/***/ 8735:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+var _BetaToolRunner_instances, _BetaToolRunner_consumed, _BetaToolRunner_mutated, _BetaToolRunner_state, _BetaToolRunner_options, _BetaToolRunner_message, _BetaToolRunner_toolResponse, _BetaToolRunner_completion, _BetaToolRunner_iterationCount, _BetaToolRunner_generateToolResponse;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.BetaToolRunner = void 0;
+const tslib_1 = __nccwpck_require__(5219);
+const error_1 = __nccwpck_require__(5063);
+const headers_1 = __nccwpck_require__(2709);
+/**
+ * Just Promise.withResolvers(), which is not available in all environments.
+ */
+function promiseWithResolvers() {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+    return { promise, resolve: resolve, reject: reject };
+}
+/**
+ * A ToolRunner handles the automatic conversation loop between the assistant and tools.
+ *
+ * A ToolRunner is an async iterable that yields either BetaMessage or BetaMessageStream objects
+ * depending on the streaming configuration.
+ */
+class BetaToolRunner {
+    constructor(client, params, options) {
+        _BetaToolRunner_instances.add(this);
+        this.client = client;
+        /** Whether the async iterator has been consumed */
+        _BetaToolRunner_consumed.set(this, false);
+        /** Whether parameters have been mutated since the last API call */
+        _BetaToolRunner_mutated.set(this, false);
+        /** Current state containing the request parameters */
+        _BetaToolRunner_state.set(this, void 0);
+        _BetaToolRunner_options.set(this, void 0);
+        /** Promise for the last message received from the assistant */
+        _BetaToolRunner_message.set(this, void 0);
+        /** Cached tool response to avoid redundant executions */
+        _BetaToolRunner_toolResponse.set(this, void 0);
+        /** Promise resolvers for waiting on completion */
+        _BetaToolRunner_completion.set(this, void 0);
+        /** Number of iterations (API requests) made so far */
+        _BetaToolRunner_iterationCount.set(this, 0);
+        tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_state, {
+            params: {
+                // You can't clone the entire params since there are functions as handlers.
+                // You also don't really need to clone params.messages, but it probably will prevent a foot gun
+                // somewhere.
+                ...params,
+                messages: structuredClone(params.messages),
+            },
+        }, "f");
+        tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_options, {
+            ...options,
+            headers: (0, headers_1.buildHeaders)([{ 'x-stainless-helper': 'BetaToolRunner' }, options?.headers]),
+        }, "f");
+        tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_completion, promiseWithResolvers(), "f");
+    }
+    async *[(_BetaToolRunner_consumed = new WeakMap(), _BetaToolRunner_mutated = new WeakMap(), _BetaToolRunner_state = new WeakMap(), _BetaToolRunner_options = new WeakMap(), _BetaToolRunner_message = new WeakMap(), _BetaToolRunner_toolResponse = new WeakMap(), _BetaToolRunner_completion = new WeakMap(), _BetaToolRunner_iterationCount = new WeakMap(), _BetaToolRunner_instances = new WeakSet(), Symbol.asyncIterator)]() {
+        var _a;
+        if (tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_consumed, "f")) {
+            throw new error_1.AnthropicError('Cannot iterate over a consumed stream');
+        }
+        tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_consumed, true, "f");
+        tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_mutated, true, "f");
+        tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_toolResponse, undefined, "f");
+        try {
+            while (true) {
+                let stream;
+                try {
+                    if (tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_state, "f").params.max_iterations &&
+                        tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_iterationCount, "f") >= tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_state, "f").params.max_iterations) {
+                        break;
+                    }
+                    tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_mutated, false, "f");
+                    tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_message, undefined, "f");
+                    tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_toolResponse, undefined, "f");
+                    tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_iterationCount, (_a = tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_iterationCount, "f"), _a++, _a), "f");
+                    const { max_iterations, ...params } = tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_state, "f").params;
+                    if (params.stream) {
+                        stream = this.client.beta.messages.stream({ ...params }, tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_options, "f"));
+                        tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_message, stream.finalMessage(), "f");
+                        // Make sure that this promise doesn't throw before we get the option to do something about it.
+                        // Error will be caught when we call await this.#message ultimately
+                        tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_message, "f").catch(() => { });
+                        yield stream;
+                    }
+                    else {
+                        tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_message, this.client.beta.messages.create({ ...params, stream: false }, tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_options, "f")), "f");
+                        yield tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_message, "f");
+                    }
+                    if (!tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_mutated, "f")) {
+                        const { role, content } = await tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_message, "f");
+                        tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_state, "f").params.messages.push({ role, content });
+                    }
+                    const toolMessage = await tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_instances, "m", _BetaToolRunner_generateToolResponse).call(this, tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_state, "f").params.messages.at(-1));
+                    if (toolMessage) {
+                        tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_state, "f").params.messages.push(toolMessage);
+                    }
+                    if (!toolMessage && !tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_mutated, "f")) {
+                        break;
+                    }
+                }
+                finally {
+                    if (stream) {
+                        stream.abort();
+                    }
+                }
+            }
+            if (!tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_message, "f")) {
+                throw new error_1.AnthropicError('ToolRunner concluded without a message from the server');
+            }
+            tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_completion, "f").resolve(await tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_message, "f"));
+        }
+        catch (error) {
+            tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_consumed, false, "f");
+            // Silence unhandled promise errors
+            tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_completion, "f").promise.catch(() => { });
+            tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_completion, "f").reject(error);
+            tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_completion, promiseWithResolvers(), "f");
+            throw error;
+        }
+    }
+    setMessagesParams(paramsOrMutator) {
+        if (typeof paramsOrMutator === 'function') {
+            tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_state, "f").params = paramsOrMutator(tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_state, "f").params);
+        }
+        else {
+            tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_state, "f").params = paramsOrMutator;
+        }
+        tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_mutated, true, "f");
+        // Invalidate cached tool response since parameters changed
+        tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_toolResponse, undefined, "f");
+    }
+    /**
+     * Get the tool response for the last message from the assistant.
+     * Avoids redundant tool executions by caching results.
+     *
+     * @returns A promise that resolves to a BetaMessageParam containing tool results, or null if no tools need to be executed
+     *
+     * @example
+     * const toolResponse = await runner.generateToolResponse();
+     * if (toolResponse) {
+     *   console.log('Tool results:', toolResponse.content);
+     * }
+     */
+    async generateToolResponse() {
+        const message = (await tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_message, "f")) ?? this.params.messages.at(-1);
+        if (!message) {
+            return null;
+        }
+        return tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_instances, "m", _BetaToolRunner_generateToolResponse).call(this, message);
+    }
+    /**
+     * Wait for the async iterator to complete. This works even if the async iterator hasn't yet started, and
+     * will wait for an instance to start and go to completion.
+     *
+     * @returns A promise that resolves to the final BetaMessage when the iterator completes
+     *
+     * @example
+     * // Start consuming the iterator
+     * for await (const message of runner) {
+     *   console.log('Message:', message.content);
+     * }
+     *
+     * // Meanwhile, wait for completion from another part of the code
+     * const finalMessage = await runner.done();
+     * console.log('Final response:', finalMessage.content);
+     */
+    done() {
+        return tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_completion, "f").promise;
+    }
+    /**
+     * Returns a promise indicating that the stream is done. Unlike .done(), this will eagerly read the stream:
+     * * If the iterator has not been consumed, consume the entire iterator and return the final message from the
+     * assistant.
+     * * If the iterator has been consumed, waits for it to complete and returns the final message.
+     *
+     * @returns A promise that resolves to the final BetaMessage from the conversation
+     * @throws {AnthropicError} If no messages were processed during the conversation
+     *
+     * @example
+     * const finalMessage = await runner.runUntilDone();
+     * console.log('Final response:', finalMessage.content);
+     */
+    async runUntilDone() {
+        // If not yet consumed, start consuming and wait for completion
+        if (!tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_consumed, "f")) {
+            for await (const _ of this) {
+                // Iterator naturally populates this.#message
+            }
+        }
+        // If consumed but not completed, wait for completion
+        return this.done();
+    }
+    /**
+     * Get the current parameters being used by the ToolRunner.
+     *
+     * @returns A readonly view of the current ToolRunnerParams
+     *
+     * @example
+     * const currentParams = runner.params;
+     * console.log('Current model:', currentParams.model);
+     * console.log('Message count:', currentParams.messages.length);
+     */
+    get params() {
+        return tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_state, "f").params;
+    }
+    /**
+     * Add one or more messages to the conversation history.
+     *
+     * @param messages - One or more BetaMessageParam objects to add to the conversation
+     *
+     * @example
+     * runner.pushMessages(
+     *   { role: 'user', content: 'Also, what about the weather in NYC?' }
+     * );
+     *
+     * @example
+     * // Adding multiple messages
+     * runner.pushMessages(
+     *   { role: 'user', content: 'What about NYC?' },
+     *   { role: 'user', content: 'And Boston?' }
+     * );
+     */
+    pushMessages(...messages) {
+        this.setMessagesParams((params) => ({
+            ...params,
+            messages: [...params.messages, ...messages],
+        }));
+    }
+    /**
+     * Makes the ToolRunner directly awaitable, equivalent to calling .runUntilDone()
+     * This allows using `await runner` instead of `await runner.runUntilDone()`
+     */
+    then(onfulfilled, onrejected) {
+        return this.runUntilDone().then(onfulfilled, onrejected);
+    }
+}
+exports.BetaToolRunner = BetaToolRunner;
+_BetaToolRunner_generateToolResponse = async function _BetaToolRunner_generateToolResponse(lastMessage) {
+    if (tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_toolResponse, "f") !== undefined) {
+        return tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_toolResponse, "f");
+    }
+    tslib_1.__classPrivateFieldSet(this, _BetaToolRunner_toolResponse, generateToolResponse(tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_state, "f").params, lastMessage), "f");
+    return tslib_1.__classPrivateFieldGet(this, _BetaToolRunner_toolResponse, "f");
+};
+async function generateToolResponse(params, lastMessage = params.messages.at(-1)) {
+    // Only process if the last message is from the assistant and has tool use blocks
+    if (!lastMessage ||
+        lastMessage.role !== 'assistant' ||
+        !lastMessage.content ||
+        typeof lastMessage.content === 'string') {
+        return null;
+    }
+    const toolUseBlocks = lastMessage.content.filter((content) => content.type === 'tool_use');
+    if (toolUseBlocks.length === 0) {
+        return null;
+    }
+    const toolResults = await Promise.all(toolUseBlocks.map(async (toolUse) => {
+        const tool = params.tools.find((t) => t.name === toolUse.name);
+        if (!tool || !('run' in tool)) {
+            return {
+                type: 'tool_result',
+                tool_use_id: toolUse.id,
+                content: `Error: Tool '${toolUse.name}' not found`,
+                is_error: true,
+            };
+        }
+        try {
+            let input = toolUse.input;
+            if ('parse' in tool && tool.parse) {
+                input = tool.parse(input);
+            }
+            const result = await tool.run(input);
+            return {
+                type: 'tool_result',
+                tool_use_id: toolUse.id,
+                content: result,
+            };
+        }
+        catch (error) {
+            return {
+                type: 'tool_result',
+                tool_use_id: toolUse.id,
+                content: `Error: ${error instanceof Error ? error.message : String(error)}`,
+                is_error: true,
+            };
+        }
+    }));
+    return {
+        role: 'user',
+        content: toolResults,
+    };
+}
+//# sourceMappingURL=BetaToolRunner.js.map
+
+/***/ }),
+
 /***/ 834:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -8010,18 +8467,22 @@ const ModelsAPI = tslib_1.__importStar(__nccwpck_require__(1786));
 const models_1 = __nccwpck_require__(1786);
 const MessagesAPI = tslib_1.__importStar(__nccwpck_require__(2231));
 const messages_1 = __nccwpck_require__(2231);
+const SkillsAPI = tslib_1.__importStar(__nccwpck_require__(735));
+const skills_1 = __nccwpck_require__(735);
 class Beta extends resource_1.APIResource {
     constructor() {
         super(...arguments);
         this.models = new ModelsAPI.Models(this._client);
         this.messages = new MessagesAPI.Messages(this._client);
         this.files = new FilesAPI.Files(this._client);
+        this.skills = new SkillsAPI.Skills(this._client);
     }
 }
 exports.Beta = Beta;
 Beta.Models = models_1.Models;
 Beta.Messages = messages_1.Messages;
 Beta.Files = files_1.Files;
+Beta.Skills = skills_1.Skills;
 //# sourceMappingURL=beta.js.map
 
 /***/ }),
@@ -8178,7 +8639,7 @@ class Batches extends resource_1.APIResource {
      * can take up to 24 hours to complete.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8192,7 +8653,7 @@ class Batches extends resource_1.APIResource {
      *           messages: [
      *             { content: 'Hello, world', role: 'user' },
      *           ],
-     *           model: 'claude-sonnet-4-20250514',
+     *           model: 'claude-sonnet-4-5-20250929',
      *         },
      *       },
      *     ],
@@ -8216,7 +8677,7 @@ class Batches extends resource_1.APIResource {
      * `results_url` field in the response.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8241,7 +8702,7 @@ class Batches extends resource_1.APIResource {
      * returned first.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8269,7 +8730,7 @@ class Batches extends resource_1.APIResource {
      * like to delete an in-progress batch, you must first cancel it.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8301,7 +8762,7 @@ class Batches extends resource_1.APIResource {
      * non-interruptible.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8329,7 +8790,7 @@ class Batches extends resource_1.APIResource {
      * requests. Use the `custom_id` field to match results to requests.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8373,13 +8834,16 @@ exports.Batches = Batches;
 
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.Messages = void 0;
+exports.BetaToolRunner = exports.Messages = void 0;
 const tslib_1 = __nccwpck_require__(5219);
 const resource_1 = __nccwpck_require__(6169);
+const constants_1 = __nccwpck_require__(3574);
+const headers_1 = __nccwpck_require__(2709);
+const beta_parser_1 = __nccwpck_require__(2751);
+const BetaMessageStream_1 = __nccwpck_require__(1940);
+const BetaToolRunner_1 = __nccwpck_require__(8735);
 const BatchesAPI = tslib_1.__importStar(__nccwpck_require__(1479));
 const batches_1 = __nccwpck_require__(1479);
-const headers_1 = __nccwpck_require__(2709);
-const BetaMessageStream_1 = __nccwpck_require__(1940);
 const DEPRECATED_MODELS = {
     'claude-1.3': 'November 6th, 2024',
     'claude-1.3-100k': 'November 6th, 2024',
@@ -8390,8 +8854,9 @@ const DEPRECATED_MODELS = {
     'claude-3-opus-20240229': 'January 5th, 2026',
     'claude-2.1': 'July 21st, 2025',
     'claude-2.0': 'July 21st, 2025',
+    'claude-3-7-sonnet-latest': 'February 19th, 2026',
+    'claude-3-7-sonnet-20250219': 'February 19th, 2026',
 };
-const constants_1 = __nccwpck_require__(3574);
 class Messages extends resource_1.APIResource {
     constructor() {
         super(...arguments);
@@ -8419,6 +8884,32 @@ class Messages extends resource_1.APIResource {
         });
     }
     /**
+     * Send a structured list of input messages with text and/or image content, along with an expected `output_format` and
+     * the response will be automatically parsed and available in the `parsed` property of the message.
+     *
+     * @example
+     * ```ts
+     * const message = await client.beta.messages.parse({
+     *   model: 'claude-3-5-sonnet-20241022',
+     *   max_tokens: 1024,
+     *   messages: [{ role: 'user', content: 'What is 2+2?' }],
+     *   output_format: zodOutputFormat(z.object({ answer: z.number() }), 'math'),
+     * });
+     *
+     * console.log(message.parsed?.answer); // 4
+     * ```
+     */
+    parse(params, options) {
+        options = {
+            ...options,
+            headers: (0, headers_1.buildHeaders)([
+                { 'anthropic-beta': [...(params.betas ?? []), 'structured-outputs-2025-11-13'].toString() },
+                options?.headers,
+            ]),
+        };
+        return this.create(params, options).then((message) => (0, beta_parser_1.parseBetaMessage)(message, params));
+    }
+    /**
      * Create a Message stream
      */
     stream(body, options) {
@@ -8431,14 +8922,14 @@ class Messages extends resource_1.APIResource {
      * including tools, images, and documents, without creating it.
      *
      * Learn more about token counting in our
-     * [user guide](/en/docs/build-with-claude/token-counting)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/token-counting)
      *
      * @example
      * ```ts
      * const betaMessageTokensCount =
      *   await client.beta.messages.countTokens({
      *     messages: [{ content: 'string', role: 'user' }],
-     *     model: 'claude-3-7-sonnet-latest',
+     *     model: 'claude-sonnet-4-5',
      *   });
      * ```
      */
@@ -8453,9 +8944,15 @@ class Messages extends resource_1.APIResource {
             ]),
         });
     }
+    toolRunner(body, options) {
+        return new BetaToolRunner_1.BetaToolRunner(this._client, body, options);
+    }
 }
 exports.Messages = Messages;
+var BetaToolRunner_2 = __nccwpck_require__(8735);
+Object.defineProperty(exports, "BetaToolRunner", ({ enumerable: true, get: function () { return BetaToolRunner_2.BetaToolRunner; } }));
 Messages.Batches = batches_1.Batches;
+Messages.BetaToolRunner = BetaToolRunner_1.BetaToolRunner;
 //# sourceMappingURL=messages.js.map
 
 /***/ }),
@@ -8524,6 +9021,218 @@ class Models extends resource_1.APIResource {
 }
 exports.Models = Models;
 //# sourceMappingURL=models.js.map
+
+/***/ }),
+
+/***/ 735:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Skills = void 0;
+const tslib_1 = __nccwpck_require__(5219);
+const resource_1 = __nccwpck_require__(6169);
+const VersionsAPI = tslib_1.__importStar(__nccwpck_require__(996));
+const versions_1 = __nccwpck_require__(996);
+const pagination_1 = __nccwpck_require__(2065);
+const headers_1 = __nccwpck_require__(2709);
+const uploads_1 = __nccwpck_require__(2505);
+const path_1 = __nccwpck_require__(390);
+class Skills extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.versions = new VersionsAPI.Versions(this._client);
+    }
+    /**
+     * Create Skill
+     *
+     * @example
+     * ```ts
+     * const skill = await client.beta.skills.create();
+     * ```
+     */
+    create(params = {}, options) {
+        const { betas, ...body } = params ?? {};
+        return this._client.post('/v1/skills?beta=true', (0, uploads_1.multipartFormRequestOptions)({
+            body,
+            ...options,
+            headers: (0, headers_1.buildHeaders)([
+                { 'anthropic-beta': [...(betas ?? []), 'skills-2025-10-02'].toString() },
+                options?.headers,
+            ]),
+        }, this._client));
+    }
+    /**
+     * Get Skill
+     *
+     * @example
+     * ```ts
+     * const skill = await client.beta.skills.retrieve('skill_id');
+     * ```
+     */
+    retrieve(skillID, params = {}, options) {
+        const { betas } = params ?? {};
+        return this._client.get((0, path_1.path) `/v1/skills/${skillID}?beta=true`, {
+            ...options,
+            headers: (0, headers_1.buildHeaders)([
+                { 'anthropic-beta': [...(betas ?? []), 'skills-2025-10-02'].toString() },
+                options?.headers,
+            ]),
+        });
+    }
+    /**
+     * List Skills
+     *
+     * @example
+     * ```ts
+     * // Automatically fetches more pages as needed.
+     * for await (const skillListResponse of client.beta.skills.list()) {
+     *   // ...
+     * }
+     * ```
+     */
+    list(params = {}, options) {
+        const { betas, ...query } = params ?? {};
+        return this._client.getAPIList('/v1/skills?beta=true', (pagination_1.PageCursor), {
+            query,
+            ...options,
+            headers: (0, headers_1.buildHeaders)([
+                { 'anthropic-beta': [...(betas ?? []), 'skills-2025-10-02'].toString() },
+                options?.headers,
+            ]),
+        });
+    }
+    /**
+     * Delete Skill
+     *
+     * @example
+     * ```ts
+     * const skill = await client.beta.skills.delete('skill_id');
+     * ```
+     */
+    delete(skillID, params = {}, options) {
+        const { betas } = params ?? {};
+        return this._client.delete((0, path_1.path) `/v1/skills/${skillID}?beta=true`, {
+            ...options,
+            headers: (0, headers_1.buildHeaders)([
+                { 'anthropic-beta': [...(betas ?? []), 'skills-2025-10-02'].toString() },
+                options?.headers,
+            ]),
+        });
+    }
+}
+exports.Skills = Skills;
+Skills.Versions = versions_1.Versions;
+//# sourceMappingURL=skills.js.map
+
+/***/ }),
+
+/***/ 996:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Versions = void 0;
+const resource_1 = __nccwpck_require__(6169);
+const pagination_1 = __nccwpck_require__(2065);
+const headers_1 = __nccwpck_require__(2709);
+const uploads_1 = __nccwpck_require__(2505);
+const path_1 = __nccwpck_require__(390);
+class Versions extends resource_1.APIResource {
+    /**
+     * Create Skill Version
+     *
+     * @example
+     * ```ts
+     * const version = await client.beta.skills.versions.create(
+     *   'skill_id',
+     * );
+     * ```
+     */
+    create(skillID, params = {}, options) {
+        const { betas, ...body } = params ?? {};
+        return this._client.post((0, path_1.path) `/v1/skills/${skillID}/versions?beta=true`, (0, uploads_1.multipartFormRequestOptions)({
+            body,
+            ...options,
+            headers: (0, headers_1.buildHeaders)([
+                { 'anthropic-beta': [...(betas ?? []), 'skills-2025-10-02'].toString() },
+                options?.headers,
+            ]),
+        }, this._client));
+    }
+    /**
+     * Get Skill Version
+     *
+     * @example
+     * ```ts
+     * const version = await client.beta.skills.versions.retrieve(
+     *   'version',
+     *   { skill_id: 'skill_id' },
+     * );
+     * ```
+     */
+    retrieve(version, params, options) {
+        const { skill_id, betas } = params;
+        return this._client.get((0, path_1.path) `/v1/skills/${skill_id}/versions/${version}?beta=true`, {
+            ...options,
+            headers: (0, headers_1.buildHeaders)([
+                { 'anthropic-beta': [...(betas ?? []), 'skills-2025-10-02'].toString() },
+                options?.headers,
+            ]),
+        });
+    }
+    /**
+     * List Skill Versions
+     *
+     * @example
+     * ```ts
+     * // Automatically fetches more pages as needed.
+     * for await (const versionListResponse of client.beta.skills.versions.list(
+     *   'skill_id',
+     * )) {
+     *   // ...
+     * }
+     * ```
+     */
+    list(skillID, params = {}, options) {
+        const { betas, ...query } = params ?? {};
+        return this._client.getAPIList((0, path_1.path) `/v1/skills/${skillID}/versions?beta=true`, (pagination_1.PageCursor), {
+            query,
+            ...options,
+            headers: (0, headers_1.buildHeaders)([
+                { 'anthropic-beta': [...(betas ?? []), 'skills-2025-10-02'].toString() },
+                options?.headers,
+            ]),
+        });
+    }
+    /**
+     * Delete Skill Version
+     *
+     * @example
+     * ```ts
+     * const version = await client.beta.skills.versions.delete(
+     *   'version',
+     *   { skill_id: 'skill_id' },
+     * );
+     * ```
+     */
+    delete(version, params, options) {
+        const { skill_id, betas } = params;
+        return this._client.delete((0, path_1.path) `/v1/skills/${skill_id}/versions/${version}?beta=true`, {
+            ...options,
+            headers: (0, headers_1.buildHeaders)([
+                { 'anthropic-beta': [...(betas ?? []), 'skills-2025-10-02'].toString() },
+                options?.headers,
+            ]),
+        });
+    }
+}
+exports.Versions = Versions;
+//# sourceMappingURL=versions.js.map
 
 /***/ }),
 
@@ -8602,7 +9311,7 @@ class Batches extends resource_1.APIResource {
      * can take up to 24 hours to complete.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8615,7 +9324,7 @@ class Batches extends resource_1.APIResource {
      *         messages: [
      *           { content: 'Hello, world', role: 'user' },
      *         ],
-     *         model: 'claude-sonnet-4-20250514',
+     *         model: 'claude-sonnet-4-5-20250929',
      *       },
      *     },
      *   ],
@@ -8631,7 +9340,7 @@ class Batches extends resource_1.APIResource {
      * `results_url` field in the response.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8648,7 +9357,7 @@ class Batches extends resource_1.APIResource {
      * returned first.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8668,7 +9377,7 @@ class Batches extends resource_1.APIResource {
      * like to delete an in-progress batch, you must first cancel it.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8691,7 +9400,7 @@ class Batches extends resource_1.APIResource {
      * non-interruptible.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8711,7 +9420,7 @@ class Batches extends resource_1.APIResource {
      * requests. Use the `custom_id` field to match results to requests.
      *
      * Learn more about the Message Batches API in our
-     * [user guide](/en/docs/build-with-claude/batch-processing)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/batch-processing)
      *
      * @example
      * ```ts
@@ -8787,14 +9496,14 @@ class Messages extends resource_1.APIResource {
      * including tools, images, and documents, without creating it.
      *
      * Learn more about token counting in our
-     * [user guide](/en/docs/build-with-claude/token-counting)
+     * [user guide](https://docs.claude.com/en/docs/build-with-claude/token-counting)
      *
      * @example
      * ```ts
      * const messageTokensCount =
      *   await client.messages.countTokens({
      *     messages: [{ content: 'string', role: 'user' }],
-     *     model: 'claude-3-7-sonnet-latest',
+     *     model: 'claude-sonnet-4-5',
      *   });
      * ```
      */
@@ -8813,6 +9522,8 @@ const DEPRECATED_MODELS = {
     'claude-3-opus-20240229': 'January 5th, 2026',
     'claude-2.1': 'July 21st, 2025',
     'claude-2.0': 'July 21st, 2025',
+    'claude-3-7-sonnet-latest': 'February 19th, 2026',
+    'claude-3-7-sonnet-20250219': 'February 19th, 2026',
 };
 Messages.Batches = batches_1.Batches;
 //# sourceMappingURL=messages.js.map
@@ -8902,7 +9613,7 @@ tslib_1.__exportStar(__nccwpck_require__(4138), exports);
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.VERSION = void 0;
-exports.VERSION = '0.57.0'; // x-release-please-version
+exports.VERSION = '0.70.1'; // x-release-please-version
 //# sourceMappingURL=version.js.map
 
 /***/ }),
@@ -9796,7 +10507,9 @@ class AST {
         if (this.#root === this)
             this.#fillNegs();
         if (!this.type) {
-            const noEmpty = this.isStart() && this.isEnd();
+            const noEmpty = this.isStart() &&
+                this.isEnd() &&
+                !this.#parts.some(s => typeof s !== 'string');
             const src = this.#parts
                 .map(p => {
                 const [re, _, hasMagic, uflag] = typeof p === 'string'
@@ -9952,10 +10665,7 @@ class AST {
                 }
             }
             if (c === '*') {
-                if (noEmpty && glob === '*')
-                    re += starNoEmpty;
-                else
-                    re += star;
+                re += noEmpty && glob === '*' ? starNoEmpty : star;
                 hasMagic = true;
                 continue;
             }
@@ -10143,16 +10853,24 @@ exports.escape = void 0;
 /**
  * Escape all magic characters in a glob pattern.
  *
- * If the {@link windowsPathsNoEscape | GlobOptions.windowsPathsNoEscape}
+ * If the {@link MinimatchOptions.windowsPathsNoEscape}
  * option is used, then characters are escaped by wrapping in `[]`, because
  * a magic character wrapped in a character class can only be satisfied by
  * that exact character.  In this mode, `\` is _not_ escaped, because it is
  * not interpreted as a magic character, but instead as a path separator.
+ *
+ * If the {@link MinimatchOptions.magicalBraces} option is used,
+ * then braces (`{` and `}`) will be escaped.
  */
-const escape = (s, { windowsPathsNoEscape = false, } = {}) => {
+const escape = (s, { windowsPathsNoEscape = false, magicalBraces = false, } = {}) => {
     // don't need to escape +@! because we escape the parens
     // that make those magic, and escaping ! as [!] isn't valid,
     // because [!]] is a valid glob class meaning not ']'.
+    if (magicalBraces) {
+        return windowsPathsNoEscape
+            ? s.replace(/[?*()[\]{}]/g, '[$&]')
+            : s.replace(/[?*()[\]\\{}]/g, '\\$&');
+    }
     return windowsPathsNoEscape
         ? s.replace(/[?*()[\]]/g, '[$&]')
         : s.replace(/[?*()[\]\\]/g, '\\$&');
@@ -10808,7 +11526,7 @@ class Minimatch {
             }
         }
         // resolve and reduce . and .. portions in the file as well.
-        // dont' need to do the second phase, because it's only one string[]
+        // don't need to do the second phase, because it's only one string[]
         const { optimizationLevel = 1 } = this.options;
         if (optimizationLevel >= 2) {
             file = this.levelTwoFileOptimize(file);
@@ -11061,14 +11779,25 @@ class Minimatch {
                     }
                 }
                 else if (next === undefined) {
-                    pp[i - 1] = prev + '(?:\\/|' + twoStar + ')?';
+                    pp[i - 1] = prev + '(?:\\/|\\/' + twoStar + ')?';
                 }
                 else if (next !== exports.GLOBSTAR) {
                     pp[i - 1] = prev + '(?:\\/|\\/' + twoStar + '\\/)' + next;
                     pp[i + 1] = exports.GLOBSTAR;
                 }
             });
-            return pp.filter(p => p !== exports.GLOBSTAR).join('/');
+            const filtered = pp.filter(p => p !== exports.GLOBSTAR);
+            // For partial matches, we need to make the pattern match
+            // any prefix of the full path. We do this by generating
+            // alternative patterns that match progressively longer prefixes.
+            if (this.partial && filtered.length >= 1) {
+                const prefixes = [];
+                for (let i = 1; i <= filtered.length; i++) {
+                    prefixes.push(filtered.slice(0, i).join('/'));
+                }
+                return '(?:' + prefixes.join('|') + ')';
+            }
+            return filtered.join('/');
         })
             .join('|');
         // need to wrap in parens if we had more than one thing with |,
@@ -11077,6 +11806,10 @@ class Minimatch {
         // must match entire pattern
         // ending in a * or ** will make it less strict.
         re = '^' + open + re + close + '$';
+        // In partial mode, '/' should always match as it's a valid prefix for any pattern
+        if (this.partial) {
+            re = '^(?:\\/|' + open + re.slice(1, -1) + close + ')$';
+        }
         // can match anything, as long as it's not this.
         if (this.negate)
             re = '^(?!' + re + ').+$';
@@ -11193,21 +11926,35 @@ exports.unescape = void 0;
 /**
  * Un-escape a string that has been escaped with {@link escape}.
  *
- * If the {@link windowsPathsNoEscape} option is used, then square-brace
- * escapes are removed, but not backslash escapes.  For example, it will turn
- * the string `'[*]'` into `*`, but it will not turn `'\\*'` into `'*'`,
- * becuase `\` is a path separator in `windowsPathsNoEscape` mode.
+ * If the {@link MinimatchOptions.windowsPathsNoEscape} option is used, then
+ * square-bracket escapes are removed, but not backslash escapes.
  *
- * When `windowsPathsNoEscape` is not set, then both brace escapes and
+ * For example, it will turn the string `'[*]'` into `*`, but it will not
+ * turn `'\\*'` into `'*'`, because `\` is a path separator in
+ * `windowsPathsNoEscape` mode.
+ *
+ * When `windowsPathsNoEscape` is not set, then both square-bracket escapes and
  * backslash escapes are removed.
  *
  * Slashes (and backslashes in `windowsPathsNoEscape` mode) cannot be escaped
  * or unescaped.
+ *
+ * When `magicalBraces` is not set, escapes of braces (`{` and `}`) will not be
+ * unescaped.
  */
-const unescape = (s, { windowsPathsNoEscape = false, } = {}) => {
+const unescape = (s, { windowsPathsNoEscape = false, magicalBraces = true, } = {}) => {
+    if (magicalBraces) {
+        return windowsPathsNoEscape
+            ? s.replace(/\[([^\/\\])\]/g, '$1')
+            : s
+                .replace(/((?!\\).|^)\[([^\/\\])\]/g, '$1$2')
+                .replace(/\\([^\/])/g, '$1');
+    }
     return windowsPathsNoEscape
-        ? s.replace(/\[([^\/\\])\]/g, '$1')
-        : s.replace(/((?!\\).|^)\[([^\/\\])\]/g, '$1$2').replace(/\\([^\/])/g, '$1');
+        ? s.replace(/\[([^\/\\{}])\]/g, '$1')
+        : s
+            .replace(/((?!\\).|^)\[([^\/\\{}])\]/g, '$1$2')
+            .replace(/\\([^\/{}])/g, '$1');
 };
 exports.unescape = unescape;
 //# sourceMappingURL=unescape.js.map
@@ -11475,10 +12222,10 @@ exports.partialParse = partialParse;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AzureOpenAI = void 0;
 const tslib_1 = __nccwpck_require__(2345);
+const headers_1 = __nccwpck_require__(9267);
 const Errors = tslib_1.__importStar(__nccwpck_require__(3269));
 const utils_1 = __nccwpck_require__(2152);
 const client_1 = __nccwpck_require__(9664);
-const headers_1 = __nccwpck_require__(9267);
 /** API Client for interfacing with the Azure OpenAI API. */
 class AzureOpenAI extends client_1.OpenAI {
     /**
@@ -11511,8 +12258,6 @@ class AzureOpenAI extends client_1.OpenAI {
         if (azureADTokenProvider && apiKey) {
             throw new Errors.OpenAIError('The `apiKey` and `azureADTokenProvider` arguments are mutually exclusive; only one can be passed at a time.');
         }
-        // define a sentinel value to avoid any typing issues
-        apiKey ?? (apiKey = API_KEY_SENTINEL);
         opts.defaultQuery = { ...opts.defaultQuery, 'api-version': apiVersion };
         if (!baseURL) {
             if (!endpoint) {
@@ -11529,13 +12274,12 @@ class AzureOpenAI extends client_1.OpenAI {
             }
         }
         super({
-            apiKey,
+            apiKey: azureADTokenProvider ?? apiKey,
             baseURL,
             ...opts,
             ...(dangerouslyAllowBrowser !== undefined ? { dangerouslyAllowBrowser } : {}),
         });
         this.apiVersion = '';
-        this._azureADTokenProvider = azureADTokenProvider;
         this.apiVersion = apiVersion;
         this.deploymentName = deployment;
     }
@@ -11551,41 +12295,11 @@ class AzureOpenAI extends client_1.OpenAI {
         }
         return super.buildRequest(options, props);
     }
-    async _getAzureADToken() {
-        if (typeof this._azureADTokenProvider === 'function') {
-            const token = await this._azureADTokenProvider();
-            if (!token || typeof token !== 'string') {
-                throw new Errors.OpenAIError(`Expected 'azureADTokenProvider' argument to return a string but it returned ${token}`);
-            }
-            return token;
-        }
-        return undefined;
-    }
     async authHeaders(opts) {
-        return;
-    }
-    async prepareOptions(opts) {
-        opts.headers = (0, headers_1.buildHeaders)([opts.headers]);
-        /**
-         * The user should provide a bearer token provider if they want
-         * to use Azure AD authentication. The user shouldn't set the
-         * Authorization header manually because the header is overwritten
-         * with the Azure AD token if a bearer token provider is provided.
-         */
-        if (opts.headers.values.get('Authorization') || opts.headers.values.get('api-key')) {
-            return super.prepareOptions(opts);
+        if (typeof this._options.apiKey === 'string') {
+            return (0, headers_1.buildHeaders)([{ 'api-key': this.apiKey }]);
         }
-        const token = await this._getAzureADToken();
-        if (token) {
-            opts.headers.values.set('Authorization', `Bearer ${token}`);
-        }
-        else if (this.apiKey !== API_KEY_SENTINEL) {
-            opts.headers.values.set('api-key', this.apiKey);
-        }
-        else {
-            throw new Errors.OpenAIError('Unable to handle auth');
-        }
-        return super.prepareOptions(opts);
+        return super.authHeaders(opts);
     }
 }
 exports.AzureOpenAI = AzureOpenAI;
@@ -11600,7 +12314,6 @@ const _deployments_endpoints = new Set([
     '/batches',
     '/images/edits',
 ]);
-const API_KEY_SENTINEL = '<Missing Key>';
 //# sourceMappingURL=azure.js.map
 
 /***/ }),
@@ -11636,14 +12349,17 @@ const files_1 = __nccwpck_require__(9230);
 const images_1 = __nccwpck_require__(1395);
 const models_1 = __nccwpck_require__(2123);
 const moderations_1 = __nccwpck_require__(8328);
+const videos_1 = __nccwpck_require__(193);
 const webhooks_1 = __nccwpck_require__(5143);
 const audio_1 = __nccwpck_require__(3638);
 const beta_1 = __nccwpck_require__(8852);
 const chat_1 = __nccwpck_require__(3164);
 const containers_1 = __nccwpck_require__(5764);
+const conversations_1 = __nccwpck_require__(398);
 const evals_1 = __nccwpck_require__(4466);
 const fine_tuning_1 = __nccwpck_require__(198);
 const graders_1 = __nccwpck_require__(7882);
+const realtime_1 = __nccwpck_require__(2778);
 const responses_1 = __nccwpck_require__(1470);
 const uploads_1 = __nccwpck_require__(9962);
 const vector_stores_1 = __nccwpck_require__(9494);
@@ -11691,10 +12407,13 @@ class OpenAI {
         this.batches = new API.Batches(this);
         this.uploads = new API.Uploads(this);
         this.responses = new API.Responses(this);
+        this.realtime = new API.Realtime(this);
+        this.conversations = new API.Conversations(this);
         this.evals = new API.Evals(this);
         this.containers = new API.Containers(this);
+        this.videos = new API.Videos(this);
         if (apiKey === undefined) {
-            throw new Errors.OpenAIError("The OPENAI_API_KEY environment variable is missing or empty; either provide it, or instantiate the OpenAI client with an apiKey option, like new OpenAI({ apiKey: 'My API Key' }).");
+            throw new Errors.OpenAIError('Missing credentials. Please pass an `apiKey`, or set the `OPENAI_API_KEY` environment variable.');
         }
         const options = {
             apiKey,
@@ -11722,7 +12441,7 @@ class OpenAI {
         this.fetch = options.fetch ?? Shims.getDefaultFetch();
         tslib_1.__classPrivateFieldSet(this, _OpenAI_encoder, Opts.FallbackEncoder, "f");
         this._options = options;
-        this.apiKey = apiKey;
+        this.apiKey = typeof apiKey === 'string' ? apiKey : 'Missing Key';
         this.organization = organization;
         this.project = project;
         this.webhookSecret = webhookSecret;
@@ -11769,6 +12488,27 @@ class OpenAI {
     makeStatusError(status, error, message, headers) {
         return Errors.APIError.generate(status, error, message, headers);
     }
+    async _callApiKey() {
+        const apiKey = this._options.apiKey;
+        if (typeof apiKey !== 'function')
+            return false;
+        let token;
+        try {
+            token = await apiKey();
+        }
+        catch (err) {
+            if (err instanceof Errors.OpenAIError)
+                throw err;
+            throw new Errors.OpenAIError(`Failed to get token from 'apiKey' function: ${err.message}`, 
+            // @ts-ignore
+            { cause: err });
+        }
+        if (typeof token !== 'string' || !token) {
+            throw new Errors.OpenAIError(`Expected 'apiKey' function argument to return a string but it returned ${token}`);
+        }
+        this.apiKey = token;
+        return true;
+    }
     buildURL(path, query, defaultBaseURL) {
         const baseURL = (!tslib_1.__classPrivateFieldGet(this, _OpenAI_instances, "m", _OpenAI_baseURLOverridden).call(this) && defaultBaseURL) || this.baseURL;
         const url = (0, values_1.isAbsoluteURL)(path) ?
@@ -11786,7 +12526,9 @@ class OpenAI {
     /**
      * Used as a callback for mutating the given `FinalRequestOptions` object.
      */
-    async prepareOptions(options) { }
+    async prepareOptions(options) {
+        await this._callApiKey();
+    }
     /**
      * Used as a callback for mutating the given `RequestInit` object.
      *
@@ -11845,7 +12587,7 @@ class OpenAI {
         const controller = new AbortController();
         const response = await this.fetchWithTimeout(url, req, timeout, controller).catch(errors_1.castToError);
         const headersTime = Date.now();
-        if (response instanceof Error) {
+        if (response instanceof globalThis.Error) {
             const retryMessage = `retrying, ${retriesRemaining} attempts remaining`;
             if (options.signal?.aborted) {
                 throw new Errors.APIUserAbortError();
@@ -12081,7 +12823,7 @@ class OpenAI {
                 // Preserve legacy string encoding behavior for now
                 headers.values.has('content-type')) ||
             // `Blob` is superset of `File`
-            body instanceof Blob ||
+            (globalThis.Blob && body instanceof globalThis.Blob) ||
             // `FormData` -> `multipart/form-data`
             body instanceof FormData ||
             // `URLSearchParams` -> `application/x-www-form-urlencoded`
@@ -12137,8 +12879,11 @@ OpenAI.Beta = beta_1.Beta;
 OpenAI.Batches = batches_1.Batches;
 OpenAI.Uploads = uploads_1.Uploads;
 OpenAI.Responses = responses_1.Responses;
+OpenAI.Realtime = realtime_1.Realtime;
+OpenAI.Conversations = conversations_1.Conversations;
 OpenAI.Evals = evals_1.Evals;
 OpenAI.Containers = containers_1.Containers;
+OpenAI.Videos = videos_1.Videos;
 //# sourceMappingURL=client.js.map
 
 /***/ }),
@@ -12377,7 +13122,7 @@ exports.InvalidWebhookSignatureError = InvalidWebhookSignatureError;
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 var _AbstractPage_client;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.CursorPage = exports.Page = exports.PagePromise = exports.AbstractPage = void 0;
+exports.ConversationCursorPage = exports.CursorPage = exports.Page = exports.PagePromise = exports.AbstractPage = void 0;
 const tslib_1 = __nccwpck_require__(2345);
 const error_1 = __nccwpck_require__(5093);
 const parse_1 = __nccwpck_require__(3426);
@@ -12497,6 +13242,37 @@ class CursorPage extends AbstractPage {
     }
 }
 exports.CursorPage = CursorPage;
+class ConversationCursorPage extends AbstractPage {
+    constructor(client, response, body, options) {
+        super(client, response, body, options);
+        this.data = body.data || [];
+        this.has_more = body.has_more || false;
+        this.last_id = body.last_id || '';
+    }
+    getPaginatedItems() {
+        return this.data ?? [];
+    }
+    hasNextPage() {
+        if (this.has_more === false) {
+            return false;
+        }
+        return super.hasNextPage();
+    }
+    nextPageRequestOptions() {
+        const cursor = this.last_id;
+        if (!cursor) {
+            return null;
+        }
+        return {
+            ...this.options,
+            query: {
+                ...(0, values_1.maybeObj)(this.options.query),
+                after: cursor,
+            },
+        };
+    }
+}
+exports.ConversationCursorPage = ConversationCursorPage;
 //# sourceMappingURL=pagination.js.map
 
 /***/ }),
@@ -12561,11 +13337,7 @@ class Stream {
                         done = true;
                         continue;
                     }
-                    if (sse.event === null ||
-                        sse.event.startsWith('response.') ||
-                        sse.event.startsWith('image_edit.') ||
-                        sse.event.startsWith('image_generation.') ||
-                        sse.event.startsWith('transcript.')) {
+                    if (sse.event === null || !sse.event.startsWith('thread.')) {
                         let data;
                         try {
                             data = JSON.parse(sse.data);
@@ -14091,7 +14863,7 @@ const isResponseLike = (value) => value != null &&
     typeof value.blob === 'function';
 /**
  * Helper for creating a {@link File} to pass to an SDK upload method from a variety of different data formats
- * @param value the raw content of the file.  Can be an {@link Uploadable}, {@link BlobLikePart}, or {@link AsyncIterable} of {@link BlobLikePart}s
+ * @param value the raw content of the file. Can be an {@link Uploadable}, BlobLikePart, or AsyncIterable of BlobLikeParts
  * @param {string=} name the name of the file. If omitted, toFile will try to determine a file name from bits if possible
  * @param {Object=} options additional properties
  * @param {string=} options.type the MIME type of the content
@@ -14850,21 +15622,21 @@ const coerceBoolean = (value) => {
 };
 exports.coerceBoolean = coerceBoolean;
 const maybeCoerceInteger = (value) => {
-    if (value === undefined) {
+    if (value == null) {
         return undefined;
     }
     return (0, exports.coerceInteger)(value);
 };
 exports.maybeCoerceInteger = maybeCoerceInteger;
 const maybeCoerceFloat = (value) => {
-    if (value === undefined) {
+    if (value == null) {
         return undefined;
     }
     return (0, exports.coerceFloat)(value);
 };
 exports.maybeCoerceFloat = maybeCoerceFloat;
 const maybeCoerceBoolean = (value) => {
-    if (value === undefined) {
+    if (value == null) {
         return undefined;
     }
     return (0, exports.coerceBoolean)(value);
@@ -14893,10 +15665,10 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AbstractChatCompletionRunner = void 0;
 const tslib_1 = __nccwpck_require__(2345);
 const error_1 = __nccwpck_require__(3269);
-const RunnableFunction_1 = __nccwpck_require__(9802);
+const parser_1 = __nccwpck_require__(1368);
 const chatCompletionUtils_1 = __nccwpck_require__(1582);
 const EventStream_1 = __nccwpck_require__(4283);
-const parser_1 = __nccwpck_require__(1368);
+const RunnableFunction_1 = __nccwpck_require__(9802);
 const DEFAULT_MAX_CHAT_COMPLETIONS = 10;
 class AbstractChatCompletionRunner extends EventStream_1.EventStream {
     constructor() {
@@ -15019,7 +15791,7 @@ class AbstractChatCompletionRunner extends EventStream_1.EventStream {
     async _runTools(client, params, options) {
         const role = 'tool';
         const { tool_choice = 'auto', stream, ...restParams } = params;
-        const singleFunctionToCall = typeof tool_choice !== 'string' && tool_choice?.function?.name;
+        const singleFunctionToCall = typeof tool_choice !== 'string' && tool_choice.type === 'function' && tool_choice?.function?.name;
         const { maxChatCompletions = DEFAULT_MAX_CHAT_COMPLETIONS } = options || {};
         // TODO(someday): clean this logic up
         const inputTools = params.tools.map((tool) => {
@@ -15138,7 +15910,7 @@ _AbstractChatCompletionRunner_instances = new WeakSet(), _AbstractChatCompletion
     for (let i = this.messages.length - 1; i >= 0; i--) {
         const message = this.messages[i];
         if ((0, chatCompletionUtils_1.isAssistantMessage)(message) && message?.tool_calls?.length) {
-            return message.tool_calls.at(-1)?.function;
+            return message.tool_calls.filter((x) => x.type === 'function').at(-1)?.function;
         }
     }
     return;
@@ -15781,11 +16553,11 @@ var _ChatCompletionStream_instances, _ChatCompletionStream_params, _ChatCompleti
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.ChatCompletionStream = void 0;
 const tslib_1 = __nccwpck_require__(2345);
+const parser_1 = __nccwpck_require__(6107);
 const error_1 = __nccwpck_require__(3269);
-const AbstractChatCompletionRunner_1 = __nccwpck_require__(2883);
+const parser_2 = __nccwpck_require__(1368);
 const streaming_1 = __nccwpck_require__(1835);
-const parser_1 = __nccwpck_require__(1368);
-const parser_2 = __nccwpck_require__(6107);
+const AbstractChatCompletionRunner_1 = __nccwpck_require__(2883);
 class ChatCompletionStream extends AbstractChatCompletionRunner_1.AbstractChatCompletionRunner {
     constructor(params) {
         super();
@@ -15965,12 +16737,12 @@ class ChatCompletionStream extends AbstractChatCompletionRunner_1.AbstractChatCo
             throw new Error('tool call snapshot missing `type`');
         }
         if (toolCallSnapshot.type === 'function') {
-            const inputTool = tslib_1.__classPrivateFieldGet(this, _ChatCompletionStream_params, "f")?.tools?.find((tool) => tool.type === 'function' && tool.function.name === toolCallSnapshot.function.name);
+            const inputTool = tslib_1.__classPrivateFieldGet(this, _ChatCompletionStream_params, "f")?.tools?.find((tool) => (0, parser_2.isChatCompletionFunctionTool)(tool) && tool.function.name === toolCallSnapshot.function.name); // TS doesn't narrow based on isChatCompletionTool
             this._emit('tool_calls.function.arguments.done', {
                 name: toolCallSnapshot.function.name,
                 index: toolCallIndex,
                 arguments: toolCallSnapshot.function.arguments,
-                parsed_arguments: (0, parser_1.isAutoParsableTool)(inputTool) ? inputTool.$parseRaw(toolCallSnapshot.function.arguments)
+                parsed_arguments: (0, parser_2.isAutoParsableTool)(inputTool) ? inputTool.$parseRaw(toolCallSnapshot.function.arguments)
                     : inputTool?.function.strict ? JSON.parse(toolCallSnapshot.function.arguments)
                         : null,
             });
@@ -16013,7 +16785,7 @@ class ChatCompletionStream extends AbstractChatCompletionRunner_1.AbstractChatCo
         return finalizeChatCompletion(snapshot, tslib_1.__classPrivateFieldGet(this, _ChatCompletionStream_params, "f"));
     }, _ChatCompletionStream_getAutoParseableResponseFormat = function _ChatCompletionStream_getAutoParseableResponseFormat() {
         const responseFormat = tslib_1.__classPrivateFieldGet(this, _ChatCompletionStream_params, "f")?.response_format;
-        if ((0, parser_1.isAutoParsableResponseFormat)(responseFormat)) {
+        if ((0, parser_2.isAutoParsableResponseFormat)(responseFormat)) {
             return responseFormat;
         }
         return null;
@@ -16055,7 +16827,7 @@ class ChatCompletionStream extends AbstractChatCompletionRunner_1.AbstractChatCo
             }
             if (finish_reason) {
                 choice.finish_reason = finish_reason;
-                if (tslib_1.__classPrivateFieldGet(this, _ChatCompletionStream_params, "f") && (0, parser_1.hasAutoParseableInput)(tslib_1.__classPrivateFieldGet(this, _ChatCompletionStream_params, "f"))) {
+                if (tslib_1.__classPrivateFieldGet(this, _ChatCompletionStream_params, "f") && (0, parser_2.hasAutoParseableInput)(tslib_1.__classPrivateFieldGet(this, _ChatCompletionStream_params, "f"))) {
                     if (finish_reason === 'length') {
                         throw new error_1.LengthFinishReasonError();
                     }
@@ -16091,7 +16863,7 @@ class ChatCompletionStream extends AbstractChatCompletionRunner_1.AbstractChatCo
             if (content) {
                 choice.message.content = (choice.message.content || '') + content;
                 if (!choice.message.refusal && tslib_1.__classPrivateFieldGet(this, _ChatCompletionStream_instances, "m", _ChatCompletionStream_getAutoParseableResponseFormat).call(this)) {
-                    choice.message.parsed = (0, parser_2.partialParse)(choice.message.content);
+                    choice.message.parsed = (0, parser_1.partialParse)(choice.message.content);
                 }
             }
             if (tool_calls) {
@@ -16110,8 +16882,8 @@ class ChatCompletionStream extends AbstractChatCompletionRunner_1.AbstractChatCo
                         tool_call.function.name = fn.name;
                     if (fn?.arguments) {
                         tool_call.function.arguments += fn.arguments;
-                        if ((0, parser_1.shouldParseToolCall)(tslib_1.__classPrivateFieldGet(this, _ChatCompletionStream_params, "f"), tool_call)) {
-                            tool_call.function.parsed_arguments = (0, parser_2.partialParse)(tool_call.function.arguments);
+                        if ((0, parser_2.shouldParseToolCall)(tslib_1.__classPrivateFieldGet(this, _ChatCompletionStream_params, "f"), tool_call)) {
+                            tool_call.function.parsed_arguments = (0, parser_1.partialParse)(tool_call.function.arguments);
                         }
                     }
                 }
@@ -16254,7 +17026,7 @@ function finalizeChatCompletion(snapshot, params) {
         object: 'chat.completion',
         ...(system_fingerprint ? { system_fingerprint } : {}),
     };
-    return (0, parser_1.maybeParseChatCompletion)(completion, params);
+    return (0, parser_2.maybeParseChatCompletion)(completion, params);
 }
 function str(x) {
     return JSON.stringify(x);
@@ -16765,6 +17537,7 @@ function isPresent(obj) {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isChatCompletionFunctionTool = isChatCompletionFunctionTool;
 exports.makeParseableResponseFormat = makeParseableResponseFormat;
 exports.makeParseableTextFormat = makeParseableTextFormat;
 exports.isAutoParsableResponseFormat = isAutoParsableResponseFormat;
@@ -16774,8 +17547,12 @@ exports.maybeParseChatCompletion = maybeParseChatCompletion;
 exports.parseChatCompletion = parseChatCompletion;
 exports.shouldParseToolCall = shouldParseToolCall;
 exports.hasAutoParseableInput = hasAutoParseableInput;
+exports.assertToolCallsAreChatCompletionFunctionToolCalls = assertToolCallsAreChatCompletionFunctionToolCalls;
 exports.validateInputTools = validateInputTools;
 const error_1 = __nccwpck_require__(3269);
+function isChatCompletionFunctionTool(tool) {
+    return tool !== undefined && 'function' in tool && tool.function !== undefined;
+}
 function makeParseableResponseFormat(response_format, parser) {
     const obj = { ...response_format };
     Object.defineProperties(obj, {
@@ -16832,18 +17609,21 @@ function maybeParseChatCompletion(completion, params) {
     if (!params || !hasAutoParseableInput(params)) {
         return {
             ...completion,
-            choices: completion.choices.map((choice) => ({
-                ...choice,
-                message: {
-                    ...choice.message,
-                    parsed: null,
-                    ...(choice.message.tool_calls ?
-                        {
-                            tool_calls: choice.message.tool_calls,
-                        }
-                        : undefined),
-                },
-            })),
+            choices: completion.choices.map((choice) => {
+                assertToolCallsAreChatCompletionFunctionToolCalls(choice.message.tool_calls);
+                return {
+                    ...choice,
+                    message: {
+                        ...choice.message,
+                        parsed: null,
+                        ...(choice.message.tool_calls ?
+                            {
+                                tool_calls: choice.message.tool_calls,
+                            }
+                            : undefined),
+                    },
+                };
+            }),
         };
     }
     return parseChatCompletion(completion, params);
@@ -16856,6 +17636,7 @@ function parseChatCompletion(completion, params) {
         if (choice.finish_reason === 'content_filter') {
             throw new error_1.ContentFilterFinishReasonError();
         }
+        assertToolCallsAreChatCompletionFunctionToolCalls(choice.message.tool_calls);
         return {
             ...choice,
             message: {
@@ -16887,7 +17668,7 @@ function parseResponseFormat(params, content) {
     return null;
 }
 function parseToolCall(params, toolCall) {
-    const inputTool = params.tools?.find((inputTool) => inputTool.function?.name === toolCall.function.name);
+    const inputTool = params.tools?.find((inputTool) => isChatCompletionFunctionTool(inputTool) && inputTool.function?.name === toolCall.function.name); // TS doesn't narrow based on isChatCompletionTool
     return {
         ...toolCall,
         function: {
@@ -16899,17 +17680,25 @@ function parseToolCall(params, toolCall) {
     };
 }
 function shouldParseToolCall(params, toolCall) {
-    if (!params) {
+    if (!params || !('tools' in params) || !params.tools) {
         return false;
     }
-    const inputTool = params.tools?.find((inputTool) => inputTool.function?.name === toolCall.function.name);
-    return isAutoParsableTool(inputTool) || inputTool?.function.strict || false;
+    const inputTool = params.tools?.find((inputTool) => isChatCompletionFunctionTool(inputTool) && inputTool.function?.name === toolCall.function.name);
+    return (isChatCompletionFunctionTool(inputTool) &&
+        (isAutoParsableTool(inputTool) || inputTool?.function.strict || false));
 }
 function hasAutoParseableInput(params) {
     if (isAutoParsableResponseFormat(params.response_format)) {
         return true;
     }
     return (params.tools?.some((t) => isAutoParsableTool(t) || (t.type === 'function' && t.function.strict === true)) ?? false);
+}
+function assertToolCallsAreChatCompletionFunctionToolCalls(toolCalls) {
+    for (const toolCall of toolCalls || []) {
+        if (toolCall.type !== 'function') {
+            throw new error_1.OpenAIError(`Currently only \`function\` tool calls are supported; Received \`${toolCall.type}\``);
+        }
+    }
 }
 function validateInputTools(tools) {
     for (const tool of tools ?? []) {
@@ -17063,8 +17852,16 @@ class ResponseStream extends EventStream_1.EventStream {
                 if (!output) {
                     throw new error_1.OpenAIError(`missing output at index ${event.output_index}`);
                 }
-                if (output.type === 'message') {
-                    output.content.push(event.part);
+                const type = output.type;
+                const part = event.part;
+                if (type === 'message' && part.type !== 'reasoning_text') {
+                    output.content.push(part);
+                }
+                else if (type === 'reasoning' && part.type === 'reasoning_text') {
+                    if (!output.content) {
+                        output.content = [];
+                    }
+                    output.content.push(part);
                 }
                 break;
             }
@@ -17092,6 +17889,23 @@ class ResponseStream extends EventStream_1.EventStream {
                 }
                 if (output.type === 'function_call') {
                     output.arguments += event.delta;
+                }
+                break;
+            }
+            case 'response.reasoning_text.delta': {
+                const output = snapshot.output[event.output_index];
+                if (!output) {
+                    throw new error_1.OpenAIError(`missing output at index ${event.output_index}`);
+                }
+                if (output.type === 'reasoning') {
+                    const content = output.content?.[event.content_index];
+                    if (!content) {
+                        throw new error_1.OpenAIError(`missing content at index ${event.content_index}`);
+                    }
+                    if (content.type !== 'reasoning_text') {
+                        throw new error_1.OpenAIError(`expected content to be 'reasoning_text', got ${content.type}`);
+                    }
+                    content.text += event.delta;
                 }
                 break;
             }
@@ -17449,21 +18263,189 @@ const AssistantsAPI = tslib_1.__importStar(__nccwpck_require__(1627));
 const assistants_1 = __nccwpck_require__(1627);
 const RealtimeAPI = tslib_1.__importStar(__nccwpck_require__(5367));
 const realtime_1 = __nccwpck_require__(5367);
+const ChatKitAPI = tslib_1.__importStar(__nccwpck_require__(5027));
+const chatkit_1 = __nccwpck_require__(5027);
 const ThreadsAPI = tslib_1.__importStar(__nccwpck_require__(6847));
 const threads_1 = __nccwpck_require__(6847);
 class Beta extends resource_1.APIResource {
     constructor() {
         super(...arguments);
         this.realtime = new RealtimeAPI.Realtime(this._client);
+        this.chatkit = new ChatKitAPI.ChatKit(this._client);
         this.assistants = new AssistantsAPI.Assistants(this._client);
         this.threads = new ThreadsAPI.Threads(this._client);
     }
 }
 exports.Beta = Beta;
 Beta.Realtime = realtime_1.Realtime;
+Beta.ChatKit = chatkit_1.ChatKit;
 Beta.Assistants = assistants_1.Assistants;
 Beta.Threads = threads_1.Threads;
 //# sourceMappingURL=beta.js.map
+
+/***/ }),
+
+/***/ 5027:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ChatKit = void 0;
+const tslib_1 = __nccwpck_require__(2345);
+const resource_1 = __nccwpck_require__(9487);
+const SessionsAPI = tslib_1.__importStar(__nccwpck_require__(7696));
+const sessions_1 = __nccwpck_require__(7696);
+const ThreadsAPI = tslib_1.__importStar(__nccwpck_require__(2928));
+const threads_1 = __nccwpck_require__(2928);
+class ChatKit extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.sessions = new SessionsAPI.Sessions(this._client);
+        this.threads = new ThreadsAPI.Threads(this._client);
+    }
+}
+exports.ChatKit = ChatKit;
+ChatKit.Sessions = sessions_1.Sessions;
+ChatKit.Threads = threads_1.Threads;
+//# sourceMappingURL=chatkit.js.map
+
+/***/ }),
+
+/***/ 7696:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Sessions = void 0;
+const resource_1 = __nccwpck_require__(9487);
+const headers_1 = __nccwpck_require__(9267);
+const path_1 = __nccwpck_require__(2704);
+class Sessions extends resource_1.APIResource {
+    /**
+     * Create a ChatKit session
+     *
+     * @example
+     * ```ts
+     * const chatSession =
+     *   await client.beta.chatkit.sessions.create({
+     *     user: 'x',
+     *     workflow: { id: 'id' },
+     *   });
+     * ```
+     */
+    create(body, options) {
+        return this._client.post('/chatkit/sessions', {
+            body,
+            ...options,
+            headers: (0, headers_1.buildHeaders)([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]),
+        });
+    }
+    /**
+     * Cancel a ChatKit session
+     *
+     * @example
+     * ```ts
+     * const chatSession =
+     *   await client.beta.chatkit.sessions.cancel('cksess_123');
+     * ```
+     */
+    cancel(sessionID, options) {
+        return this._client.post((0, path_1.path) `/chatkit/sessions/${sessionID}/cancel`, {
+            ...options,
+            headers: (0, headers_1.buildHeaders)([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]),
+        });
+    }
+}
+exports.Sessions = Sessions;
+//# sourceMappingURL=sessions.js.map
+
+/***/ }),
+
+/***/ 2928:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Threads = void 0;
+const resource_1 = __nccwpck_require__(9487);
+const pagination_1 = __nccwpck_require__(2155);
+const headers_1 = __nccwpck_require__(9267);
+const path_1 = __nccwpck_require__(2704);
+class Threads extends resource_1.APIResource {
+    /**
+     * Retrieve a ChatKit thread
+     *
+     * @example
+     * ```ts
+     * const chatkitThread =
+     *   await client.beta.chatkit.threads.retrieve('cthr_123');
+     * ```
+     */
+    retrieve(threadID, options) {
+        return this._client.get((0, path_1.path) `/chatkit/threads/${threadID}`, {
+            ...options,
+            headers: (0, headers_1.buildHeaders)([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]),
+        });
+    }
+    /**
+     * List ChatKit threads
+     *
+     * @example
+     * ```ts
+     * // Automatically fetches more pages as needed.
+     * for await (const chatkitThread of client.beta.chatkit.threads.list()) {
+     *   // ...
+     * }
+     * ```
+     */
+    list(query = {}, options) {
+        return this._client.getAPIList('/chatkit/threads', (pagination_1.ConversationCursorPage), {
+            query,
+            ...options,
+            headers: (0, headers_1.buildHeaders)([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]),
+        });
+    }
+    /**
+     * Delete a ChatKit thread
+     *
+     * @example
+     * ```ts
+     * const thread = await client.beta.chatkit.threads.delete(
+     *   'cthr_123',
+     * );
+     * ```
+     */
+    delete(threadID, options) {
+        return this._client.delete((0, path_1.path) `/chatkit/threads/${threadID}`, {
+            ...options,
+            headers: (0, headers_1.buildHeaders)([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]),
+        });
+    }
+    /**
+     * List ChatKit thread items
+     *
+     * @example
+     * ```ts
+     * // Automatically fetches more pages as needed.
+     * for await (const thread of client.beta.chatkit.threads.listItems(
+     *   'cthr_123',
+     * )) {
+     *   // ...
+     * }
+     * ```
+     */
+    listItems(threadID, query = {}, options) {
+        return this._client.getAPIList((0, path_1.path) `/chatkit/threads/${threadID}/items`, (pagination_1.ConversationCursorPage), { query, ...options, headers: (0, headers_1.buildHeaders)([{ 'OpenAI-Beta': 'chatkit_beta=v1' }, options?.headers]) });
+    }
+}
+exports.Threads = Threads;
+//# sourceMappingURL=threads.js.map
 
 /***/ }),
 
@@ -17481,6 +18463,9 @@ const SessionsAPI = tslib_1.__importStar(__nccwpck_require__(1015));
 const sessions_1 = __nccwpck_require__(1015);
 const TranscriptionSessionsAPI = tslib_1.__importStar(__nccwpck_require__(6900));
 const transcription_sessions_1 = __nccwpck_require__(6900);
+/**
+ * @deprecated Realtime has now launched and is generally available. The old beta API is now deprecated.
+ */
 class Realtime extends resource_1.APIResource {
     constructor() {
         super(...arguments);
@@ -18376,6 +19361,104 @@ Files.Content = content_1.Content;
 
 /***/ }),
 
+/***/ 398:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Conversations = void 0;
+const tslib_1 = __nccwpck_require__(2345);
+const resource_1 = __nccwpck_require__(9487);
+const ItemsAPI = tslib_1.__importStar(__nccwpck_require__(3110));
+const items_1 = __nccwpck_require__(3110);
+const path_1 = __nccwpck_require__(2704);
+class Conversations extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.items = new ItemsAPI.Items(this._client);
+    }
+    /**
+     * Create a conversation.
+     */
+    create(body = {}, options) {
+        return this._client.post('/conversations', { body, ...options });
+    }
+    /**
+     * Get a conversation
+     */
+    retrieve(conversationID, options) {
+        return this._client.get((0, path_1.path) `/conversations/${conversationID}`, options);
+    }
+    /**
+     * Update a conversation
+     */
+    update(conversationID, body, options) {
+        return this._client.post((0, path_1.path) `/conversations/${conversationID}`, { body, ...options });
+    }
+    /**
+     * Delete a conversation. Items in the conversation will not be deleted.
+     */
+    delete(conversationID, options) {
+        return this._client.delete((0, path_1.path) `/conversations/${conversationID}`, options);
+    }
+}
+exports.Conversations = Conversations;
+Conversations.Items = items_1.Items;
+//# sourceMappingURL=conversations.js.map
+
+/***/ }),
+
+/***/ 3110:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Items = void 0;
+const resource_1 = __nccwpck_require__(9487);
+const pagination_1 = __nccwpck_require__(2155);
+const path_1 = __nccwpck_require__(2704);
+class Items extends resource_1.APIResource {
+    /**
+     * Create items in a conversation with the given ID.
+     */
+    create(conversationID, params, options) {
+        const { include, ...body } = params;
+        return this._client.post((0, path_1.path) `/conversations/${conversationID}/items`, {
+            query: { include },
+            body,
+            ...options,
+        });
+    }
+    /**
+     * Get a single item from a conversation with the given IDs.
+     */
+    retrieve(itemID, params, options) {
+        const { conversation_id, ...query } = params;
+        return this._client.get((0, path_1.path) `/conversations/${conversation_id}/items/${itemID}`, { query, ...options });
+    }
+    /**
+     * List all items for a conversation with the given ID.
+     */
+    list(conversationID, query = {}, options) {
+        return this._client.getAPIList((0, path_1.path) `/conversations/${conversationID}/items`, (pagination_1.ConversationCursorPage), { query, ...options });
+    }
+    /**
+     * Delete an item from a conversation with the given IDs.
+     */
+    delete(itemID, params, options) {
+        const { conversation_id } = params;
+        return this._client.delete((0, path_1.path) `/conversations/${conversation_id}/items/${itemID}`, options);
+    }
+}
+exports.Items = Items;
+//# sourceMappingURL=items.js.map
+
+/***/ }),
+
 /***/ 7435:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -18615,22 +19698,21 @@ class Files extends resource_1.APIResource {
     /**
      * Upload a file that can be used across various endpoints. Individual files can be
      * up to 512 MB, and the size of all files uploaded by one organization can be up
-     * to 100 GB.
+     * to 1 TB.
      *
-     * The Assistants API supports files up to 2 million tokens and of specific file
-     * types. See the
-     * [Assistants Tools guide](https://platform.openai.com/docs/assistants/tools) for
-     * details.
-     *
-     * The Fine-tuning API only supports `.jsonl` files. The input also has certain
-     * required formats for fine-tuning
-     * [chat](https://platform.openai.com/docs/api-reference/fine-tuning/chat-input) or
-     * [completions](https://platform.openai.com/docs/api-reference/fine-tuning/completions-input)
-     * models.
-     *
-     * The Batch API only supports `.jsonl` files up to 200 MB in size. The input also
-     * has a specific required
-     * [format](https://platform.openai.com/docs/api-reference/batch/request-input).
+     * - The Assistants API supports files up to 2 million tokens and of specific file
+     *   types. See the
+     *   [Assistants Tools guide](https://platform.openai.com/docs/assistants/tools)
+     *   for details.
+     * - The Fine-tuning API only supports `.jsonl` files. The input also has certain
+     *   required formats for fine-tuning
+     *   [chat](https://platform.openai.com/docs/api-reference/fine-tuning/chat-input)
+     *   or
+     *   [completions](https://platform.openai.com/docs/api-reference/fine-tuning/completions-input)
+     *   models.
+     * - The Batch API only supports `.jsonl` files up to 200 MB in size. The input
+     *   also has a specific required
+     *   [format](https://platform.openai.com/docs/api-reference/batch/request-input).
      *
      * Please [contact us](https://help.openai.com/) if you need to increase these
      * storage limits.
@@ -18651,7 +19733,7 @@ class Files extends resource_1.APIResource {
         return this._client.getAPIList('/files', (pagination_1.CursorPage), { query, ...options });
     }
     /**
-     * Delete a file.
+     * Delete a file and remove it from all vector stores.
      */
     delete(fileID, options) {
         return this._client.delete((0, path_1.path) `/files/${fileID}`, options);
@@ -19173,7 +20255,7 @@ exports.Images = Images;
 
 // File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.Webhooks = exports.VectorStores = exports.Uploads = exports.Responses = exports.Moderations = exports.Models = exports.Images = exports.Graders = exports.FineTuning = exports.Files = exports.Evals = exports.Embeddings = exports.Containers = exports.Completions = exports.Beta = exports.Batches = exports.Audio = void 0;
+exports.Webhooks = exports.Videos = exports.VectorStores = exports.Uploads = exports.Responses = exports.Realtime = exports.Moderations = exports.Models = exports.Images = exports.Graders = exports.FineTuning = exports.Files = exports.Evals = exports.Embeddings = exports.Conversations = exports.Containers = exports.Completions = exports.Beta = exports.Batches = exports.Audio = void 0;
 const tslib_1 = __nccwpck_require__(2345);
 tslib_1.__exportStar(__nccwpck_require__(9436), exports);
 tslib_1.__exportStar(__nccwpck_require__(156), exports);
@@ -19187,6 +20269,8 @@ var completions_1 = __nccwpck_require__(4066);
 Object.defineProperty(exports, "Completions", ({ enumerable: true, get: function () { return completions_1.Completions; } }));
 var containers_1 = __nccwpck_require__(5764);
 Object.defineProperty(exports, "Containers", ({ enumerable: true, get: function () { return containers_1.Containers; } }));
+var conversations_1 = __nccwpck_require__(398);
+Object.defineProperty(exports, "Conversations", ({ enumerable: true, get: function () { return conversations_1.Conversations; } }));
 var embeddings_1 = __nccwpck_require__(7435);
 Object.defineProperty(exports, "Embeddings", ({ enumerable: true, get: function () { return embeddings_1.Embeddings; } }));
 var evals_1 = __nccwpck_require__(4466);
@@ -19203,12 +20287,16 @@ var models_1 = __nccwpck_require__(2123);
 Object.defineProperty(exports, "Models", ({ enumerable: true, get: function () { return models_1.Models; } }));
 var moderations_1 = __nccwpck_require__(8328);
 Object.defineProperty(exports, "Moderations", ({ enumerable: true, get: function () { return moderations_1.Moderations; } }));
+var realtime_1 = __nccwpck_require__(2778);
+Object.defineProperty(exports, "Realtime", ({ enumerable: true, get: function () { return realtime_1.Realtime; } }));
 var responses_1 = __nccwpck_require__(1470);
 Object.defineProperty(exports, "Responses", ({ enumerable: true, get: function () { return responses_1.Responses; } }));
 var uploads_1 = __nccwpck_require__(9962);
 Object.defineProperty(exports, "Uploads", ({ enumerable: true, get: function () { return uploads_1.Uploads; } }));
 var vector_stores_1 = __nccwpck_require__(9494);
 Object.defineProperty(exports, "VectorStores", ({ enumerable: true, get: function () { return vector_stores_1.VectorStores; } }));
+var videos_1 = __nccwpck_require__(193);
+Object.defineProperty(exports, "Videos", ({ enumerable: true, get: function () { return videos_1.Videos; } }));
 var webhooks_1 = __nccwpck_require__(5143);
 Object.defineProperty(exports, "Webhooks", ({ enumerable: true, get: function () { return webhooks_1.Webhooks; } }));
 //# sourceMappingURL=index.js.map
@@ -19277,6 +20365,144 @@ exports.Moderations = Moderations;
 
 /***/ }),
 
+/***/ 8430:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Calls = void 0;
+const resource_1 = __nccwpck_require__(9487);
+const headers_1 = __nccwpck_require__(9267);
+const path_1 = __nccwpck_require__(2704);
+class Calls extends resource_1.APIResource {
+    /**
+     * Accept an incoming SIP call and configure the realtime session that will handle
+     * it.
+     *
+     * @example
+     * ```ts
+     * await client.realtime.calls.accept('call_id', {
+     *   type: 'realtime',
+     * });
+     * ```
+     */
+    accept(callID, body, options) {
+        return this._client.post((0, path_1.path) `/realtime/calls/${callID}/accept`, {
+            body,
+            ...options,
+            headers: (0, headers_1.buildHeaders)([{ Accept: '*/*' }, options?.headers]),
+        });
+    }
+    /**
+     * End an active Realtime API call, whether it was initiated over SIP or WebRTC.
+     *
+     * @example
+     * ```ts
+     * await client.realtime.calls.hangup('call_id');
+     * ```
+     */
+    hangup(callID, options) {
+        return this._client.post((0, path_1.path) `/realtime/calls/${callID}/hangup`, {
+            ...options,
+            headers: (0, headers_1.buildHeaders)([{ Accept: '*/*' }, options?.headers]),
+        });
+    }
+    /**
+     * Transfer an active SIP call to a new destination using the SIP REFER verb.
+     *
+     * @example
+     * ```ts
+     * await client.realtime.calls.refer('call_id', {
+     *   target_uri: 'tel:+14155550123',
+     * });
+     * ```
+     */
+    refer(callID, body, options) {
+        return this._client.post((0, path_1.path) `/realtime/calls/${callID}/refer`, {
+            body,
+            ...options,
+            headers: (0, headers_1.buildHeaders)([{ Accept: '*/*' }, options?.headers]),
+        });
+    }
+    /**
+     * Decline an incoming SIP call by returning a SIP status code to the caller.
+     *
+     * @example
+     * ```ts
+     * await client.realtime.calls.reject('call_id');
+     * ```
+     */
+    reject(callID, body = {}, options) {
+        return this._client.post((0, path_1.path) `/realtime/calls/${callID}/reject`, {
+            body,
+            ...options,
+            headers: (0, headers_1.buildHeaders)([{ Accept: '*/*' }, options?.headers]),
+        });
+    }
+}
+exports.Calls = Calls;
+//# sourceMappingURL=calls.js.map
+
+/***/ }),
+
+/***/ 2320:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ClientSecrets = void 0;
+const resource_1 = __nccwpck_require__(9487);
+class ClientSecrets extends resource_1.APIResource {
+    /**
+     * Create a Realtime client secret with an associated session configuration.
+     *
+     * @example
+     * ```ts
+     * const clientSecret =
+     *   await client.realtime.clientSecrets.create();
+     * ```
+     */
+    create(body, options) {
+        return this._client.post('/realtime/client_secrets', { body, ...options });
+    }
+}
+exports.ClientSecrets = ClientSecrets;
+//# sourceMappingURL=client-secrets.js.map
+
+/***/ }),
+
+/***/ 2778:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Realtime = void 0;
+const tslib_1 = __nccwpck_require__(2345);
+const resource_1 = __nccwpck_require__(9487);
+const CallsAPI = tslib_1.__importStar(__nccwpck_require__(8430));
+const calls_1 = __nccwpck_require__(8430);
+const ClientSecretsAPI = tslib_1.__importStar(__nccwpck_require__(2320));
+const client_secrets_1 = __nccwpck_require__(2320);
+class Realtime extends resource_1.APIResource {
+    constructor() {
+        super(...arguments);
+        this.clientSecrets = new ClientSecretsAPI.ClientSecrets(this._client);
+        this.calls = new CallsAPI.Calls(this._client);
+    }
+}
+exports.Realtime = Realtime;
+Realtime.ClientSecrets = client_secrets_1.ClientSecrets;
+Realtime.Calls = calls_1.Calls;
+//# sourceMappingURL=realtime.js.map
+
+/***/ }),
+
 /***/ 2915:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -19311,6 +20537,33 @@ exports.InputItems = InputItems;
 
 /***/ }),
 
+/***/ 2989:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.InputTokens = void 0;
+const resource_1 = __nccwpck_require__(9487);
+class InputTokens extends resource_1.APIResource {
+    /**
+     * Get input token counts
+     *
+     * @example
+     * ```ts
+     * const response = await client.responses.inputTokens.count();
+     * ```
+     */
+    count(body = {}, options) {
+        return this._client.post('/responses/input_tokens', { body, ...options });
+    }
+}
+exports.InputTokens = InputTokens;
+//# sourceMappingURL=input-tokens.js.map
+
+/***/ }),
+
 /***/ 1470:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -19325,12 +20578,15 @@ const ResponseStream_1 = __nccwpck_require__(9977);
 const resource_1 = __nccwpck_require__(9487);
 const InputItemsAPI = tslib_1.__importStar(__nccwpck_require__(2915));
 const input_items_1 = __nccwpck_require__(2915);
+const InputTokensAPI = tslib_1.__importStar(__nccwpck_require__(2989));
+const input_tokens_1 = __nccwpck_require__(2989);
 const headers_1 = __nccwpck_require__(9267);
 const path_1 = __nccwpck_require__(2704);
 class Responses extends resource_1.APIResource {
     constructor() {
         super(...arguments);
         this.inputItems = new InputItemsAPI.InputItems(this._client);
+        this.inputTokens = new InputTokensAPI.InputTokens(this._client);
     }
     create(body, options) {
         return this._client.post('/responses', { body, ...options, stream: body.stream ?? false })._thenUnwrap((rsp) => {
@@ -19397,6 +20653,7 @@ class Responses extends resource_1.APIResource {
 }
 exports.Responses = Responses;
 Responses.InputItems = input_items_1.InputItems;
+Responses.InputTokens = input_tokens_1.InputTokens;
 //# sourceMappingURL=responses.js.map
 
 /***/ }),
@@ -19899,6 +21156,67 @@ VectorStores.FileBatches = file_batches_1.FileBatches;
 
 /***/ }),
 
+/***/ 193:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Videos = void 0;
+const resource_1 = __nccwpck_require__(9487);
+const pagination_1 = __nccwpck_require__(2155);
+const headers_1 = __nccwpck_require__(9267);
+const uploads_1 = __nccwpck_require__(5887);
+const path_1 = __nccwpck_require__(2704);
+class Videos extends resource_1.APIResource {
+    /**
+     * Create a video
+     */
+    create(body, options) {
+        return this._client.post('/videos', (0, uploads_1.maybeMultipartFormRequestOptions)({ body, ...options }, this._client));
+    }
+    /**
+     * Retrieve a video
+     */
+    retrieve(videoID, options) {
+        return this._client.get((0, path_1.path) `/videos/${videoID}`, options);
+    }
+    /**
+     * List videos
+     */
+    list(query = {}, options) {
+        return this._client.getAPIList('/videos', (pagination_1.ConversationCursorPage), { query, ...options });
+    }
+    /**
+     * Delete a video
+     */
+    delete(videoID, options) {
+        return this._client.delete((0, path_1.path) `/videos/${videoID}`, options);
+    }
+    /**
+     * Download video content
+     */
+    downloadContent(videoID, query = {}, options) {
+        return this._client.get((0, path_1.path) `/videos/${videoID}/content`, {
+            query,
+            ...options,
+            headers: (0, headers_1.buildHeaders)([{ Accept: 'application/binary' }, options?.headers]),
+            __binaryResponse: true,
+        });
+    }
+    /**
+     * Create a video remix
+     */
+    remix(videoID, body, options) {
+        return this._client.post((0, path_1.path) `/videos/${videoID}/remix`, (0, uploads_1.maybeMultipartFormRequestOptions)({ body, ...options }, this._client));
+    }
+}
+exports.Videos = Videos;
+//# sourceMappingURL=videos.js.map
+
+/***/ }),
+
 /***/ 5143:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -20027,7 +21345,7 @@ tslib_1.__exportStar(__nccwpck_require__(7787), exports);
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.VERSION = void 0;
-exports.VERSION = '5.10.2'; // x-release-please-version
+exports.VERSION = '6.9.1'; // x-release-please-version
 //# sourceMappingURL=version.js.map
 
 /***/ }),
@@ -20568,12 +21886,13 @@ class RequestError extends Error {
    */
   response;
   constructor(message, statusCode, options) {
-    super(message);
+    super(message, { cause: options.cause });
     this.name = "HttpError";
     this.status = Number.parseInt(statusCode);
     if (Number.isNaN(this.status)) {
       this.status = 0;
     }
+    /* v8 ignore else -- @preserve -- Bug with vitest coverage where it sees an else branch that doesn't exist */
     if ("response" in options) {
       this.response = options.response;
     }
@@ -20600,7 +21919,7 @@ class RequestError extends Error {
 
 
 // pkg/dist-src/version.js
-var dist_bundle_VERSION = "10.0.3";
+var dist_bundle_VERSION = "10.0.7";
 
 // pkg/dist-src/defaults.js
 var defaults_default = {
@@ -20624,6 +21943,7 @@ function dist_bundle_isPlainObject(value) {
 
 // pkg/dist-src/fetch-wrapper.js
 
+var noop = () => "";
 async function fetchWrapper(requestOptions) {
   const fetch = requestOptions.request?.fetch || globalThis.fetch;
   if (!fetch) {
@@ -20725,7 +22045,7 @@ async function fetchWrapper(requestOptions) {
 async function getResponseData(response) {
   const contentType = response.headers.get("content-type");
   if (!contentType) {
-    return response.text().catch(() => "");
+    return response.text().catch(noop);
   }
   const mimetype = (0,fast_content_type_parse/* safeParse */.xL)(contentType);
   if (isJSONResponse(mimetype)) {
@@ -20737,9 +22057,12 @@ async function getResponseData(response) {
       return text;
     }
   } else if (mimetype.type.startsWith("text/") || mimetype.parameters.charset?.toLowerCase() === "utf-8") {
-    return response.text().catch(() => "");
+    return response.text().catch(noop);
   } else {
-    return response.arrayBuffer().catch(() => new ArrayBuffer(0));
+    return response.arrayBuffer().catch(
+      /* v8 ignore next -- @preserve */
+      () => new ArrayBuffer(0)
+    );
   }
 }
 function isJSONResponse(mimetype) {
@@ -20787,6 +22110,8 @@ function dist_bundle_withDefaults(oldEndpoint, newDefaults) {
 // pkg/dist-src/index.js
 var request = dist_bundle_withDefaults(endpoint, defaults_default);
 
+/* v8 ignore next -- @preserve */
+/* v8 ignore else -- @preserve */
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/graphql/dist-bundle/index.js
 // pkg/dist-src/index.js
@@ -20971,7 +22296,7 @@ var createTokenAuth = function createTokenAuth2(token) {
 
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/core/dist-src/version.js
-const version_VERSION = "7.0.3";
+const version_VERSION = "7.0.6";
 
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/core/dist-src/index.js
@@ -20981,16 +22306,16 @@ const version_VERSION = "7.0.3";
 
 
 
-const noop = () => {
+const dist_src_noop = () => {
 };
 const consoleWarn = console.warn.bind(console);
 const consoleError = console.error.bind(console);
 function createLogger(logger = {}) {
   if (typeof logger.debug !== "function") {
-    logger.debug = noop;
+    logger.debug = dist_src_noop;
   }
   if (typeof logger.info !== "function") {
-    logger.info = noop;
+    logger.info = dist_src_noop;
   }
   if (typeof logger.warn !== "function") {
     logger.warn = consoleWarn;
@@ -21274,7 +22599,9 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /enterprises/{enterprise}/code-security/configurations",
   "GET /enterprises/{enterprise}/code-security/configurations/{configuration_id}/repositories",
   "GET /enterprises/{enterprise}/dependabot/alerts",
-  "GET /enterprises/{enterprise}/secret-scanning/alerts",
+  "GET /enterprises/{enterprise}/teams",
+  "GET /enterprises/{enterprise}/teams/{enterprise-team}/memberships",
+  "GET /enterprises/{enterprise}/teams/{enterprise-team}/organizations",
   "GET /events",
   "GET /gists",
   "GET /gists/public",
@@ -21292,9 +22619,11 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /networks/{owner}/{repo}/events",
   "GET /notifications",
   "GET /organizations",
+  "GET /organizations/{org}/dependabot/repository-access",
   "GET /orgs/{org}/actions/cache/usage-by-repository",
   "GET /orgs/{org}/actions/hosted-runners",
   "GET /orgs/{org}/actions/permissions/repositories",
+  "GET /orgs/{org}/actions/permissions/self-hosted-runners/repositories",
   "GET /orgs/{org}/actions/runner-groups",
   "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/hosted-runners",
   "GET /orgs/{org}/actions/runner-groups/{runner_group_id}/repositories",
@@ -21304,6 +22633,7 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /orgs/{org}/actions/secrets/{secret_name}/repositories",
   "GET /orgs/{org}/actions/variables",
   "GET /orgs/{org}/actions/variables/{name}/repositories",
+  "GET /orgs/{org}/attestations/repositories",
   "GET /orgs/{org}/attestations/{subject_digest}",
   "GET /orgs/{org}/blocks",
   "GET /orgs/{org}/campaigns",
@@ -21344,6 +22674,9 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /orgs/{org}/personal-access-tokens/{pat_id}/repositories",
   "GET /orgs/{org}/private-registries",
   "GET /orgs/{org}/projects",
+  "GET /orgs/{org}/projectsV2",
+  "GET /orgs/{org}/projectsV2/{project_number}/fields",
+  "GET /orgs/{org}/projectsV2/{project_number}/items",
   "GET /orgs/{org}/properties/values",
   "GET /orgs/{org}/public_members",
   "GET /orgs/{org}/repos",
@@ -21352,6 +22685,7 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /orgs/{org}/rulesets/{ruleset_id}/history",
   "GET /orgs/{org}/secret-scanning/alerts",
   "GET /orgs/{org}/security-advisories",
+  "GET /orgs/{org}/settings/immutable-releases/repositories",
   "GET /orgs/{org}/settings/network-configurations",
   "GET /orgs/{org}/team/{team_slug}/copilot/metrics",
   "GET /orgs/{org}/teams",
@@ -21364,9 +22698,7 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /orgs/{org}/teams/{team_slug}/projects",
   "GET /orgs/{org}/teams/{team_slug}/repos",
   "GET /orgs/{org}/teams/{team_slug}/teams",
-  "GET /projects/columns/{column_id}/cards",
   "GET /projects/{project_id}/collaborators",
-  "GET /projects/{project_id}/columns",
   "GET /repos/{owner}/{repo}/actions/artifacts",
   "GET /repos/{owner}/{repo}/actions/caches",
   "GET /repos/{owner}/{repo}/actions/organization-secrets",
@@ -21424,6 +22756,8 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /repos/{owner}/{repo}/issues/comments/{comment_id}/reactions",
   "GET /repos/{owner}/{repo}/issues/events",
   "GET /repos/{owner}/{repo}/issues/{issue_number}/comments",
+  "GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by",
+  "GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocking",
   "GET /repos/{owner}/{repo}/issues/{issue_number}/events",
   "GET /repos/{owner}/{repo}/issues/{issue_number}/labels",
   "GET /repos/{owner}/{repo}/issues/{issue_number}/reactions",
@@ -21516,6 +22850,9 @@ var paginatingEndpoints = (/* unused pure expression or super */ null && ([
   "GET /users/{username}/orgs",
   "GET /users/{username}/packages",
   "GET /users/{username}/projects",
+  "GET /users/{username}/projectsV2",
+  "GET /users/{username}/projectsV2/{project_number}/fields",
+  "GET /users/{username}/projectsV2/{project_number}/items",
   "GET /users/{username}/received_events",
   "GET /users/{username}/received_events/public",
   "GET /users/{username}/repos",
@@ -21546,7 +22883,7 @@ paginateRest.VERSION = plugin_paginate_rest_dist_bundle_VERSION;
 
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/plugin-rest-endpoint-methods/dist-src/version.js
-const plugin_rest_endpoint_methods_dist_src_version_VERSION = "16.0.0";
+const plugin_rest_endpoint_methods_dist_src_version_VERSION = "17.0.0";
 
 //# sourceMappingURL=version.js.map
 
@@ -21608,6 +22945,12 @@ const Endpoints = {
     ],
     deleteArtifact: [
       "DELETE /repos/{owner}/{repo}/actions/artifacts/{artifact_id}"
+    ],
+    deleteCustomImageFromOrg: [
+      "DELETE /orgs/{org}/actions/hosted-runners/images/custom/{image_definition_id}"
+    ],
+    deleteCustomImageVersionFromOrg: [
+      "DELETE /orgs/{org}/actions/hosted-runners/images/custom/{image_definition_id}/versions/{version}"
     ],
     deleteEnvironmentSecret: [
       "DELETE /repos/{owner}/{repo}/environments/{environment_name}/secrets/{secret_name}"
@@ -21682,6 +23025,12 @@ const Endpoints = {
       "GET /repos/{owner}/{repo}/actions/permissions/selected-actions"
     ],
     getArtifact: ["GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}"],
+    getCustomImageForOrg: [
+      "GET /orgs/{org}/actions/hosted-runners/images/custom/{image_definition_id}"
+    ],
+    getCustomImageVersionForOrg: [
+      "GET /orgs/{org}/actions/hosted-runners/images/custom/{image_definition_id}/versions/{version}"
+    ],
     getCustomOidcSubClaimForRepo: [
       "GET /repos/{owner}/{repo}/actions/oidc/customization/sub"
     ],
@@ -21761,6 +23110,12 @@ const Endpoints = {
       "GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/timing"
     ],
     listArtifactsForRepo: ["GET /repos/{owner}/{repo}/actions/artifacts"],
+    listCustomImageVersionsForOrg: [
+      "GET /orgs/{org}/actions/hosted-runners/images/custom/{image_definition_id}/versions"
+    ],
+    listCustomImagesForOrg: [
+      "GET /orgs/{org}/actions/hosted-runners/images/custom"
+    ],
     listEnvironmentSecrets: [
       "GET /repos/{owner}/{repo}/environments/{environment_name}/secrets"
     ],
@@ -22018,6 +23373,12 @@ const Endpoints = {
     getGithubActionsBillingOrg: ["GET /orgs/{org}/settings/billing/actions"],
     getGithubActionsBillingUser: [
       "GET /users/{username}/settings/billing/actions"
+    ],
+    getGithubBillingPremiumRequestUsageReportOrg: [
+      "GET /organizations/{org}/settings/billing/premium_request/usage"
+    ],
+    getGithubBillingPremiumRequestUsageReportUser: [
+      "GET /users/{username}/settings/billing/premium_request/usage"
     ],
     getGithubBillingUsageReportOrg: [
       "GET /organizations/{org}/settings/billing/usage"
@@ -22360,11 +23721,20 @@ const Endpoints = {
     removeSelectedRepoFromOrgSecret: [
       "DELETE /orgs/{org}/dependabot/secrets/{secret_name}/repositories/{repository_id}"
     ],
+    repositoryAccessForOrg: [
+      "GET /organizations/{org}/dependabot/repository-access"
+    ],
+    setRepositoryAccessDefaultLevel: [
+      "PUT /organizations/{org}/dependabot/repository-access/default-level"
+    ],
     setSelectedReposForOrgSecret: [
       "PUT /orgs/{org}/dependabot/secrets/{secret_name}/repositories"
     ],
     updateAlert: [
       "PATCH /repos/{owner}/{repo}/dependabot/alerts/{alert_number}"
+    ],
+    updateRepositoryAccessForOrg: [
+      "PATCH /organizations/{org}/dependabot/repository-access"
     ]
   },
   dependencyGraph: {
@@ -22377,6 +23747,51 @@ const Endpoints = {
     exportSbom: ["GET /repos/{owner}/{repo}/dependency-graph/sbom"]
   },
   emojis: { get: ["GET /emojis"] },
+  enterpriseTeamMemberships: {
+    add: [
+      "PUT /enterprises/{enterprise}/teams/{enterprise-team}/memberships/{username}"
+    ],
+    bulkAdd: [
+      "POST /enterprises/{enterprise}/teams/{enterprise-team}/memberships/add"
+    ],
+    bulkRemove: [
+      "POST /enterprises/{enterprise}/teams/{enterprise-team}/memberships/remove"
+    ],
+    get: [
+      "GET /enterprises/{enterprise}/teams/{enterprise-team}/memberships/{username}"
+    ],
+    list: ["GET /enterprises/{enterprise}/teams/{enterprise-team}/memberships"],
+    remove: [
+      "DELETE /enterprises/{enterprise}/teams/{enterprise-team}/memberships/{username}"
+    ]
+  },
+  enterpriseTeamOrganizations: {
+    add: [
+      "PUT /enterprises/{enterprise}/teams/{enterprise-team}/organizations/{org}"
+    ],
+    bulkAdd: [
+      "POST /enterprises/{enterprise}/teams/{enterprise-team}/organizations/add"
+    ],
+    bulkRemove: [
+      "POST /enterprises/{enterprise}/teams/{enterprise-team}/organizations/remove"
+    ],
+    delete: [
+      "DELETE /enterprises/{enterprise}/teams/{enterprise-team}/organizations/{org}"
+    ],
+    getAssignment: [
+      "GET /enterprises/{enterprise}/teams/{enterprise-team}/organizations/{org}"
+    ],
+    getAssignments: [
+      "GET /enterprises/{enterprise}/teams/{enterprise-team}/organizations"
+    ]
+  },
+  enterpriseTeams: {
+    create: ["POST /enterprises/{enterprise}/teams"],
+    delete: ["DELETE /enterprises/{enterprise}/teams/{team_slug}"],
+    get: ["GET /enterprises/{enterprise}/teams/{team_slug}"],
+    list: ["GET /enterprises/{enterprise}/teams"],
+    update: ["PATCH /enterprises/{enterprise}/teams/{team_slug}"]
+  },
   gists: {
     checkIsStarred: ["GET /gists/{gist_id}/star"],
     create: ["POST /gists"],
@@ -22470,6 +23885,9 @@ const Endpoints = {
     addAssignees: [
       "POST /repos/{owner}/{repo}/issues/{issue_number}/assignees"
     ],
+    addBlockedByDependency: [
+      "POST /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by"
+    ],
     addLabels: ["POST /repos/{owner}/{repo}/issues/{issue_number}/labels"],
     addSubIssue: [
       "POST /repos/{owner}/{repo}/issues/{issue_number}/sub_issues"
@@ -22496,10 +23914,17 @@ const Endpoints = {
     getEvent: ["GET /repos/{owner}/{repo}/issues/events/{event_id}"],
     getLabel: ["GET /repos/{owner}/{repo}/labels/{name}"],
     getMilestone: ["GET /repos/{owner}/{repo}/milestones/{milestone_number}"],
+    getParent: ["GET /repos/{owner}/{repo}/issues/{issue_number}/parent"],
     list: ["GET /issues"],
     listAssignees: ["GET /repos/{owner}/{repo}/assignees"],
     listComments: ["GET /repos/{owner}/{repo}/issues/{issue_number}/comments"],
     listCommentsForRepo: ["GET /repos/{owner}/{repo}/issues/comments"],
+    listDependenciesBlockedBy: [
+      "GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by"
+    ],
+    listDependenciesBlocking: [
+      "GET /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocking"
+    ],
     listEvents: ["GET /repos/{owner}/{repo}/issues/{issue_number}/events"],
     listEventsForRepo: ["GET /repos/{owner}/{repo}/issues/events"],
     listEventsForTimeline: [
@@ -22525,6 +23950,9 @@ const Endpoints = {
     ],
     removeAssignees: [
       "DELETE /repos/{owner}/{repo}/issues/{issue_number}/assignees"
+    ],
+    removeDependencyBlockedBy: [
+      "DELETE /repos/{owner}/{repo}/issues/{issue_number}/dependencies/blocked_by/{issue_id}"
     ],
     removeLabel: [
       "DELETE /repos/{owner}/{repo}/issues/{issue_number}/labels/{name}"
@@ -22628,30 +24056,61 @@ const Endpoints = {
     convertMemberToOutsideCollaborator: [
       "PUT /orgs/{org}/outside_collaborators/{username}"
     ],
+    createArtifactStorageRecord: [
+      "POST /orgs/{org}/artifacts/metadata/storage-record"
+    ],
     createInvitation: ["POST /orgs/{org}/invitations"],
     createIssueType: ["POST /orgs/{org}/issue-types"],
-    createOrUpdateCustomProperties: ["PATCH /orgs/{org}/properties/schema"],
-    createOrUpdateCustomPropertiesValuesForRepos: [
-      "PATCH /orgs/{org}/properties/values"
+    createWebhook: ["POST /orgs/{org}/hooks"],
+    customPropertiesForOrgsCreateOrUpdateOrganizationValues: [
+      "PATCH /organizations/{org}/org-properties/values"
     ],
-    createOrUpdateCustomProperty: [
+    customPropertiesForOrgsGetOrganizationValues: [
+      "GET /organizations/{org}/org-properties/values"
+    ],
+    customPropertiesForReposCreateOrUpdateOrganizationDefinition: [
       "PUT /orgs/{org}/properties/schema/{custom_property_name}"
     ],
-    createWebhook: ["POST /orgs/{org}/hooks"],
+    customPropertiesForReposCreateOrUpdateOrganizationDefinitions: [
+      "PATCH /orgs/{org}/properties/schema"
+    ],
+    customPropertiesForReposCreateOrUpdateOrganizationValues: [
+      "PATCH /orgs/{org}/properties/values"
+    ],
+    customPropertiesForReposDeleteOrganizationDefinition: [
+      "DELETE /orgs/{org}/properties/schema/{custom_property_name}"
+    ],
+    customPropertiesForReposGetOrganizationDefinition: [
+      "GET /orgs/{org}/properties/schema/{custom_property_name}"
+    ],
+    customPropertiesForReposGetOrganizationDefinitions: [
+      "GET /orgs/{org}/properties/schema"
+    ],
+    customPropertiesForReposGetOrganizationValues: [
+      "GET /orgs/{org}/properties/values"
+    ],
     delete: ["DELETE /orgs/{org}"],
+    deleteAttestationsBulk: ["POST /orgs/{org}/attestations/delete-request"],
+    deleteAttestationsById: [
+      "DELETE /orgs/{org}/attestations/{attestation_id}"
+    ],
+    deleteAttestationsBySubjectDigest: [
+      "DELETE /orgs/{org}/attestations/digest/{subject_digest}"
+    ],
     deleteIssueType: ["DELETE /orgs/{org}/issue-types/{issue_type_id}"],
     deleteWebhook: ["DELETE /orgs/{org}/hooks/{hook_id}"],
-    enableOrDisableSecurityProductOnAllOrgRepos: [
-      "POST /orgs/{org}/{security_product}/{enablement}",
-      {},
-      {
-        deprecated: "octokit.rest.orgs.enableOrDisableSecurityProductOnAllOrgRepos() is deprecated, see https://docs.github.com/rest/orgs/orgs#enable-or-disable-a-security-feature-for-an-organization"
-      }
+    disableSelectedRepositoryImmutableReleasesOrganization: [
+      "DELETE /orgs/{org}/settings/immutable-releases/repositories/{repository_id}"
+    ],
+    enableSelectedRepositoryImmutableReleasesOrganization: [
+      "PUT /orgs/{org}/settings/immutable-releases/repositories/{repository_id}"
     ],
     get: ["GET /orgs/{org}"],
-    getAllCustomProperties: ["GET /orgs/{org}/properties/schema"],
-    getCustomProperty: [
-      "GET /orgs/{org}/properties/schema/{custom_property_name}"
+    getImmutableReleasesSettings: [
+      "GET /orgs/{org}/settings/immutable-releases"
+    ],
+    getImmutableReleasesSettingsRepositories: [
+      "GET /orgs/{org}/settings/immutable-releases/repositories"
     ],
     getMembershipForAuthenticatedUser: ["GET /user/memberships/orgs/{org}"],
     getMembershipForUser: ["GET /orgs/{org}/memberships/{username}"],
@@ -22667,9 +24126,15 @@ const Endpoints = {
     ],
     list: ["GET /organizations"],
     listAppInstallations: ["GET /orgs/{org}/installations"],
+    listArtifactStorageRecords: [
+      "GET /orgs/{org}/artifacts/{subject_digest}/metadata/storage-records"
+    ],
+    listAttestationRepositories: ["GET /orgs/{org}/attestations/repositories"],
     listAttestations: ["GET /orgs/{org}/attestations/{subject_digest}"],
+    listAttestationsBulk: [
+      "POST /orgs/{org}/attestations/bulk-list{?per_page,before,after}"
+    ],
     listBlockedUsers: ["GET /orgs/{org}/blocks"],
-    listCustomPropertiesValuesForRepos: ["GET /orgs/{org}/properties/values"],
     listFailedInvitations: ["GET /orgs/{org}/failed_invitations"],
     listForAuthenticatedUser: ["GET /user/orgs"],
     listForUser: ["GET /users/{username}/orgs"],
@@ -22707,9 +24172,6 @@ const Endpoints = {
     redeliverWebhookDelivery: [
       "POST /orgs/{org}/hooks/{hook_id}/deliveries/{delivery_id}/attempts"
     ],
-    removeCustomProperty: [
-      "DELETE /orgs/{org}/properties/schema/{custom_property_name}"
-    ],
     removeMember: ["DELETE /orgs/{org}/members/{username}"],
     removeMembershipForUser: ["DELETE /orgs/{org}/memberships/{username}"],
     removeOutsideCollaborator: [
@@ -22742,6 +24204,12 @@ const Endpoints = {
     ],
     revokeOrgRoleUser: [
       "DELETE /orgs/{org}/organization-roles/users/{username}/{role_id}"
+    ],
+    setImmutableReleasesSettings: [
+      "PUT /orgs/{org}/settings/immutable-releases"
+    ],
+    setImmutableReleasesSettingsRepositories: [
+      "PUT /orgs/{org}/settings/immutable-releases/repositories"
     ],
     setMembershipForUser: ["PUT /orgs/{org}/memberships/{username}"],
     setPublicMembershipForAuthenticatedUser: [
@@ -22860,6 +24328,46 @@ const Endpoints = {
     listOrgPrivateRegistries: ["GET /orgs/{org}/private-registries"],
     updateOrgPrivateRegistry: [
       "PATCH /orgs/{org}/private-registries/{secret_name}"
+    ]
+  },
+  projects: {
+    addItemForOrg: ["POST /orgs/{org}/projectsV2/{project_number}/items"],
+    addItemForUser: [
+      "POST /users/{username}/projectsV2/{project_number}/items"
+    ],
+    deleteItemForOrg: [
+      "DELETE /orgs/{org}/projectsV2/{project_number}/items/{item_id}"
+    ],
+    deleteItemForUser: [
+      "DELETE /users/{username}/projectsV2/{project_number}/items/{item_id}"
+    ],
+    getFieldForOrg: [
+      "GET /orgs/{org}/projectsV2/{project_number}/fields/{field_id}"
+    ],
+    getFieldForUser: [
+      "GET /users/{username}/projectsV2/{project_number}/fields/{field_id}"
+    ],
+    getForOrg: ["GET /orgs/{org}/projectsV2/{project_number}"],
+    getForUser: ["GET /users/{username}/projectsV2/{project_number}"],
+    getOrgItem: ["GET /orgs/{org}/projectsV2/{project_number}/items/{item_id}"],
+    getUserItem: [
+      "GET /users/{username}/projectsV2/{project_number}/items/{item_id}"
+    ],
+    listFieldsForOrg: ["GET /orgs/{org}/projectsV2/{project_number}/fields"],
+    listFieldsForUser: [
+      "GET /users/{username}/projectsV2/{project_number}/fields"
+    ],
+    listForOrg: ["GET /orgs/{org}/projectsV2"],
+    listForUser: ["GET /users/{username}/projectsV2"],
+    listItemsForOrg: ["GET /orgs/{org}/projectsV2/{project_number}/items"],
+    listItemsForUser: [
+      "GET /users/{username}/projectsV2/{project_number}/items"
+    ],
+    updateItemForOrg: [
+      "PATCH /orgs/{org}/projectsV2/{project_number}/items/{item_id}"
+    ],
+    updateItemForUser: [
+      "PATCH /users/{username}/projectsV2/{project_number}/items/{item_id}"
     ]
   },
   pulls: {
@@ -23022,6 +24530,7 @@ const Endpoints = {
       "GET /repos/{owner}/{repo}/automated-security-fixes"
     ],
     checkCollaborator: ["GET /repos/{owner}/{repo}/collaborators/{username}"],
+    checkImmutableReleases: ["GET /repos/{owner}/{repo}/immutable-releases"],
     checkPrivateVulnerabilityReporting: [
       "GET /repos/{owner}/{repo}/private-vulnerability-reporting"
     ],
@@ -23057,9 +24566,6 @@ const Endpoints = {
     createForAuthenticatedUser: ["POST /user/repos"],
     createFork: ["POST /repos/{owner}/{repo}/forks"],
     createInOrg: ["POST /orgs/{org}/repos"],
-    createOrUpdateCustomPropertiesValues: [
-      "PATCH /repos/{owner}/{repo}/properties/values"
-    ],
     createOrUpdateEnvironment: [
       "PUT /repos/{owner}/{repo}/environments/{environment_name}"
     ],
@@ -23073,6 +24579,12 @@ const Endpoints = {
       "POST /repos/{template_owner}/{template_repo}/generate"
     ],
     createWebhook: ["POST /repos/{owner}/{repo}/hooks"],
+    customPropertiesForReposCreateOrUpdateRepositoryValues: [
+      "PATCH /repos/{owner}/{repo}/properties/values"
+    ],
+    customPropertiesForReposGetRepositoryValues: [
+      "GET /repos/{owner}/{repo}/properties/values"
+    ],
     declineInvitation: [
       "DELETE /user/repository_invitations/{invitation_id}",
       {},
@@ -23127,6 +24639,9 @@ const Endpoints = {
     disableDeploymentProtectionRule: [
       "DELETE /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}"
     ],
+    disableImmutableReleases: [
+      "DELETE /repos/{owner}/{repo}/immutable-releases"
+    ],
     disablePrivateVulnerabilityReporting: [
       "DELETE /repos/{owner}/{repo}/private-vulnerability-reporting"
     ],
@@ -23143,6 +24658,7 @@ const Endpoints = {
     enableAutomatedSecurityFixes: [
       "PUT /repos/{owner}/{repo}/automated-security-fixes"
     ],
+    enableImmutableReleases: ["PUT /repos/{owner}/{repo}/immutable-releases"],
     enablePrivateVulnerabilityReporting: [
       "PUT /repos/{owner}/{repo}/private-vulnerability-reporting"
     ],
@@ -23194,7 +24710,6 @@ const Endpoints = {
     getCustomDeploymentProtectionRule: [
       "GET /repos/{owner}/{repo}/environments/{environment_name}/deployment_protection_rules/{protection_rule_id}"
     ],
-    getCustomPropertiesValues: ["GET /repos/{owner}/{repo}/properties/values"],
     getDeployKey: ["GET /repos/{owner}/{repo}/keys/{key_id}"],
     getDeployment: ["GET /repos/{owner}/{repo}/deployments/{deployment_id}"],
     getDeploymentBranchPolicy: [
@@ -23412,13 +24927,7 @@ const Endpoints = {
   search: {
     code: ["GET /search/code"],
     commits: ["GET /search/commits"],
-    issuesAndPullRequests: [
-      "GET /search/issues",
-      {},
-      {
-        deprecated: "octokit.rest.search.issuesAndPullRequests() is deprecated, see https://docs.github.com/rest/search/search#search-issues-and-pull-requests"
-      }
-    ],
+    issuesAndPullRequests: ["GET /search/issues"],
     labels: ["GET /search/labels"],
     repos: ["GET /search/repositories"],
     topics: ["GET /search/topics"],
@@ -23432,16 +24941,19 @@ const Endpoints = {
       "GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}"
     ],
     getScanHistory: ["GET /repos/{owner}/{repo}/secret-scanning/scan-history"],
-    listAlertsForEnterprise: [
-      "GET /enterprises/{enterprise}/secret-scanning/alerts"
-    ],
     listAlertsForOrg: ["GET /orgs/{org}/secret-scanning/alerts"],
     listAlertsForRepo: ["GET /repos/{owner}/{repo}/secret-scanning/alerts"],
     listLocationsForAlert: [
       "GET /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}/locations"
     ],
+    listOrgPatternConfigs: [
+      "GET /orgs/{org}/secret-scanning/pattern-configurations"
+    ],
     updateAlert: [
       "PATCH /repos/{owner}/{repo}/secret-scanning/alerts/{alert_number}"
+    ],
+    updateOrgPatternConfigs: [
+      "PATCH /orgs/{org}/secret-scanning/pattern-configurations"
     ]
   },
   securityAdvisories: {
@@ -23551,6 +25063,15 @@ const Endpoints = {
     ],
     createPublicSshKeyForAuthenticatedUser: ["POST /user/keys"],
     createSshSigningKeyForAuthenticatedUser: ["POST /user/ssh_signing_keys"],
+    deleteAttestationsBulk: [
+      "POST /users/{username}/attestations/delete-request"
+    ],
+    deleteAttestationsById: [
+      "DELETE /users/{username}/attestations/{attestation_id}"
+    ],
+    deleteAttestationsBySubjectDigest: [
+      "DELETE /users/{username}/attestations/digest/{subject_digest}"
+    ],
     deleteEmailForAuthenticated: [
       "DELETE /user/emails",
       {},
@@ -23595,6 +25116,9 @@ const Endpoints = {
     ],
     list: ["GET /users"],
     listAttestations: ["GET /users/{username}/attestations/{subject_digest}"],
+    listAttestationsBulk: [
+      "POST /users/{username}/attestations/bulk-list{?per_page,before,after}"
+    ],
     listBlockedByAuthenticated: [
       "GET /user/blocks",
       {},
@@ -23805,7 +25329,7 @@ legacyRestEndpointMethods.VERSION = plugin_rest_endpoint_methods_dist_src_versio
 //# sourceMappingURL=index.js.map
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/rest/dist-src/version.js
-const rest_dist_src_version_VERSION = "22.0.0";
+const rest_dist_src_version_VERSION = "22.0.1";
 
 
 ;// CONCATENATED MODULE: ./node_modules/@octokit/rest/dist-src/index.js

@@ -184,16 +184,6 @@ function estimateTokenCount(text) {
     const koreanCharCount = text.replace(/[^ㄱ-ㅎㅏ-ㅣ가-힣]/g, "").length;
     return Math.ceil(englishCharCount / 4) + koreanCharCount * 2;
 }
-function isChatCompletionModel(model) {
-    // codex/instruct-style models require the completions endpoint instead of chat
-    const lower = model.toLowerCase();
-    return !(lower.includes("codex") ||
-        lower.includes("instruct") ||
-        lower.includes("davinci") ||
-        lower.includes("babbage") ||
-        lower.includes("curie") ||
-        lower.includes("ada"));
-}
 async function getAIResponse(file, prompt) {
     try {
         const estimatedTokens = estimateTokenCount(prompt);
@@ -231,33 +221,20 @@ async function getAIResponse(file, prompt) {
                 frequency_penalty: 0,
                 presence_penalty: 0,
             };
-            let res = '';
-            if (isChatCompletionModel(AI_MODEL)) {
-                const response = await openai.chat.completions.create({
-                    ...queryConfig,
-                    response_format: { type: "json_object" },
-                    messages: [
-                        {
-                            role: "system",
-                            content: prompt,
-                        },
-                    ],
-                });
-                if (response.choices.length === 0) {
-                    return [];
-                }
-                res = response.choices[0].message?.content?.trim() || "{}";
+            const response = await openai.chat.completions.create({
+                ...queryConfig,
+                response_format: { type: "json_object" },
+                messages: [
+                    {
+                        role: "system",
+                        content: prompt,
+                    },
+                ],
+            });
+            if (response.choices.length === 0) {
+                return [];
             }
-            else {
-                const response = await openai.completions.create({
-                    ...queryConfig,
-                    prompt,
-                });
-                if (response.choices.length === 0) {
-                    return [];
-                }
-                res = response.choices[0].text?.trim() || "{}";
-            }
+            const res = response.choices[0].message?.content?.trim() || "{}";
             const cleanedJsonString = res.replace(/```json|```/g, "");
             return JSON.parse(cleanedJsonString).reviews;
         }

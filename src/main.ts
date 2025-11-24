@@ -170,19 +170,6 @@ function estimateTokenCount(text: string): number {
   return Math.ceil(englishCharCount / 4) + koreanCharCount * 2;
 }
 
-function isChatCompletionModel(model: string): boolean {
-  // codex/instruct-style models require the completions endpoint instead of chat
-  const lower = model.toLowerCase();
-  return !(
-    lower.includes("codex") ||
-    lower.includes("instruct") ||
-    lower.includes("davinci") ||
-    lower.includes("babbage") ||
-    lower.includes("curie") ||
-    lower.includes("ada")
-  );
-}
-
 async function getAIResponse(
   file: File,
   prompt: string,
@@ -230,38 +217,20 @@ async function getAIResponse(
         presence_penalty: 0,
       };
 
-      let res: string = '';
-
-      if (isChatCompletionModel(AI_MODEL)) {
-        const response = await openai.chat.completions.create({
-          ...queryConfig,
-          response_format: { type: "json_object" },
-          messages: [
-            {
-              role: "system",
-              content: prompt,
-            },
-          ],
-        });
-
-        if (response.choices.length === 0) {
-          return [];
-        }
-
-        res = response.choices[0].message?.content?.trim() || "{}";
-      } else {
-        const response = await openai.completions.create({
-          ...queryConfig,
-          prompt,
-        });
-
-        if (response.choices.length === 0) {
-          return [];
-        }
-
-        res = response.choices[0].text?.trim() || "{}";
+      const response = await openai.chat.completions.create({
+        ...queryConfig,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: prompt,
+          },
+        ],
+      });
+      if (response.choices.length === 0) {
+        return [];
       }
-
+      const res = response.choices[0].message?.content?.trim() || "{}";
       const cleanedJsonString = res.replace(/```json|```/g, "");
       return JSON.parse(cleanedJsonString).reviews;
     }

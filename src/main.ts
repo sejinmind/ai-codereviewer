@@ -211,7 +211,7 @@ async function getAIResponse(
       const queryConfig = {
         model: AI_MODEL,
         temperature: 0.1,
-        max_tokens: MAX_OUTPUT_TOKENS,
+        max_completion_tokens: MAX_OUTPUT_TOKENS,
         top_p: 1,
         frequency_penalty: 0,
         presence_penalty: 0,

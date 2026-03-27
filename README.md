@@ -45,7 +45,7 @@ jobs:
         uses: sejinmind/ai-codereviewer@main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          AI_MODEL: "gpt-4-1106-preview" # 필수
+          AI_MODEL: "gpt-5.4" # 필수
           MODEL_PROVIDER: "openai" # "openai" 또는 "anthropic"
           # OpenAI 설정 (선택사항)
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
